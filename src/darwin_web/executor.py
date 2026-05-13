@@ -346,11 +346,24 @@ def _run_planner_action_inner(
             return True, None, f"request_human: could not read page.url: {exc}"
         wait_for_owner = coerce_bool(action.get("wait_for_owner"), default=True)
         max_wait_s = coerce_max_wait_s(action.get("max_wait_s"), default=3600.0)
+
+        # Ensure we always have a screenshot for Telegram.
+        # The pre-captured vision_png_path may be None if the earlier screenshot failed.
+        image_for_telegram = vision_png_path
+        if image_for_telegram is None or not image_for_telegram.is_file():
+            try:
+                import tempfile
+                _tmp = Path(tempfile.mktemp(suffix=".png"))
+                page.screenshot(path=str(_tmp), full_page=False)
+                image_for_telegram = _tmp
+            except Exception:  # noqa: BLE001
+                image_for_telegram = None
+
         err = notify_owner_request_human(
             reason=reason.strip(),
             instructions=instructions.strip(),
             page_url=page_url,
-            image_path=vision_png_path,
+            image_path=image_for_telegram,
             wait_for_owner=wait_for_owner,
             max_wait_s=max_wait_s,
         )
