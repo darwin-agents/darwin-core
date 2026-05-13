@@ -13,6 +13,8 @@ def choose_action(
     step: int,
     snapshot: dict[str, object],
     recent_errors: list[str],
+    *,
+    system_prompt: str | None = None,
 ) -> tuple[dict[str, object], str, str]:
     prompt = (
         f"Goal: {goal}\n"
@@ -22,7 +24,7 @@ def choose_action(
         "Checklist: if page asks for birthday/gender, ensure month/day/year/gender are addressed before Next.\n"
         "Return the next single action."
     )
-    raw = service.chat(prompt, system_prompt=SYSTEM_PROMPT)
+    raw = service.chat(prompt, system_prompt=system_prompt or SYSTEM_PROMPT)
     try:
         action = json.loads(raw)
     except json.JSONDecodeError as exc:

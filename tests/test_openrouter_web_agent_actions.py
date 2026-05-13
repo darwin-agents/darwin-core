@@ -3,6 +3,23 @@ from __future__ import annotations
 import pytest
 
 from darwin_core.agents.web.agent import choose_form_actions, run_action
+from darwin_core.agents.web.web_owner_profile import WebOwnerProfile, load_web_owner_profile
+
+
+def _test_owner_profile() -> WebOwnerProfile:
+    return WebOwnerProfile.from_dict(
+        {
+            "email": "owner@example.com",
+            "password": "s3cret!",
+            "first_name": "John",
+            "last_name": "Doe",
+            "phone": "2025550142",
+            "birth_day": "15",
+            "birth_month": "January",
+            "birth_year": "1998",
+            "gender": "Male",
+        }
+    )
 
 
 class _Locator:
@@ -59,10 +76,11 @@ def test_choose_form_actions_prefers_required_empty_input() -> None:
             }
         ]
     }
-    actions = choose_form_actions(snapshot)
+    actions = choose_form_actions(snapshot, _test_owner_profile())
     assert actions
     assert actions[0]["action"] == "type"
     assert actions[0]["selector"] == "#firstName"
+    assert actions[0]["value"] == "John"
 
 
 def test_choose_form_actions_builds_combobox_sequence() -> None:
@@ -84,13 +102,17 @@ def test_choose_form_actions_builds_combobox_sequence() -> None:
             }
         ]
     }
-    actions = choose_form_actions(snapshot)
+    actions = choose_form_actions(snapshot, _test_owner_profile())
     assert [item["action"] for item in actions] == ["click", "wait", "click_text"]
     assert actions[1]["wait_ms"] == 800
     assert actions[2]["target_text"] == "January"
 
 
-def test_choose_form_actions_treats_month_placeholder_as_empty() -> None:
+def test_load_web_owner_profile_rejects_empty_field(tmp_path) -> None:
+    path = tmp_path / "owner.json"
+    path.write_text('{"email": "a@b.co", "password": "x"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="missing or empty"):
+        load_web_owner_profile(path)
     snapshot = {
         "form_controls": [
             {
@@ -109,6 +131,6 @@ def test_choose_form_actions_treats_month_placeholder_as_empty() -> None:
             }
         ]
     }
-    actions = choose_form_actions(snapshot)
+    actions = choose_form_actions(snapshot, _test_owner_profile())
     assert actions
     assert actions[0]["selector"] == "#month"

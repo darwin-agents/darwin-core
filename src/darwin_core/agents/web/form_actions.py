@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .prompts import GENDER_OPTIONS, MONTH_NAMES
+from .web_owner_profile import WebOwnerProfile
 
 
 def infer_field_kind(control: dict[str, Any]) -> str:
@@ -31,20 +32,21 @@ def infer_field_kind(control: dict[str, Any]) -> str:
     return "generic_text"
 
 
-def default_value_for_field(field_kind: str) -> str:
-    defaults = {
-        "email": "john.doe.testing.2026",
-        "password": "T3sting!SecurePass42",
-        "first_name": "John",
-        "last_name": "Doe",
-        "phone": "2025550142",
-        "day": "15",
-        "year": "1998",
-        "month": "January",
-        "gender": "Male",
-        "generic_text": "John",
+def value_for_field(field_kind: str, profile: WebOwnerProfile) -> str:
+    """Resolve the string to use for a given inferred field kind from the owner's profile."""
+    by_kind: dict[str, str] = {
+        "email": profile.email,
+        "password": profile.password,
+        "first_name": profile.first_name,
+        "last_name": profile.last_name,
+        "phone": profile.phone,
+        "day": profile.birth_day,
+        "year": profile.birth_year,
+        "month": profile.birth_month,
+        "gender": profile.gender,
+        "generic_text": profile.generic_text,
     }
-    return defaults.get(field_kind, "John")
+    return by_kind.get(field_kind, profile.generic_text)
 
 
 def is_empty_value(value: Any) -> bool:
@@ -72,12 +74,12 @@ def should_fill_control(control: dict[str, Any]) -> bool:
     return is_empty_value(current_value) and (required or likely_signup_field)
 
 
-def action_for_control(control: dict[str, Any]) -> list[dict[str, Any]]:
+def action_for_control(control: dict[str, Any], profile: WebOwnerProfile) -> list[dict[str, Any]]:
     selector = control.get("selectorHint")
     if not isinstance(selector, str) or not selector:
         return []
     field_kind = infer_field_kind(control)
-    text_value = default_value_for_field(field_kind)
+    text_value = value_for_field(field_kind, profile)
     tag = str(control.get("tag", ""))
     role = str(control.get("role", ""))
 
@@ -95,9 +97,12 @@ def action_for_control(control: dict[str, Any]) -> list[dict[str, Any]]:
                 if field_kind == "month" and text_value.lower() in text.lower():
                     chosen = value
                     break
-                if field_kind == "gender" and ("male" in text.lower() or "rather not say" in text.lower()):
-                    chosen = value
-                    break
+                if field_kind == "gender":
+                    tv = text_value.lower()
+                    tl = text.lower()
+                    if tv and (tv in tl or tl in tv):
+                        chosen = value
+                        break
                 if chosen is None:
                     chosen = value
             if chosen:
@@ -169,7 +174,7 @@ def action_for_control(control: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def choose_form_actions(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+def choose_form_actions(snapshot: dict[str, Any], profile: WebOwnerProfile) -> list[dict[str, Any]]:
     controls = snapshot.get("form_controls")
     if not isinstance(controls, list):
         return []
@@ -178,7 +183,7 @@ def choose_form_actions(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         if not should_fill_control(raw_control):
             continue
-        candidate_actions = action_for_control(raw_control)
+        candidate_actions = action_for_control(raw_control, profile)
         if candidate_actions:
             return candidate_actions
     return []

@@ -4,12 +4,13 @@ from darwin_core.agents.web.execution import execute_action_step, write_debug_ar
 from darwin_core.agents.web.form_actions import (
     action_for_control,
     choose_form_actions,
-    default_value_for_field,
     google_birthday_ready_to_continue,
     infer_field_kind,
     is_empty_value,
     should_fill_control,
+    value_for_field,
 )
+from darwin_core.agents.web.web_owner_profile import WebOwnerProfile, load_web_owner_profile
 from darwin_core.agents.web.google_actions import (
     try_google_click_next,
     try_google_gender_select,
@@ -34,7 +35,9 @@ __all__ = [
     "page_snapshot",
     "snapshot_signature",
     "infer_field_kind",
-    "default_value_for_field",
+    "value_for_field",
+    "WebOwnerProfile",
+    "load_web_owner_profile",
     "is_empty_value",
     "should_fill_control",
     "action_for_control",
