@@ -22,7 +22,7 @@ def test_playbook_yaml_roundtrip(tmp_path: Path) -> None:
                 description="Follow the first link",
                 dom={"selector": "a", "tag": "a"},
                 selector="a",
-                screenshot_after="001-step.png",
+                screenshot_after="002-vision-input.png",
             ),
             PlaybookStep(op="wait_ms", description="Brief settle", dom={"ms": 100}, ms=100),
         ],
@@ -36,7 +36,7 @@ def test_playbook_yaml_roundtrip(tmp_path: Path) -> None:
     assert loaded.steps[0].op == "goto"
     assert loaded.steps[0].url == "https://example.com"
     assert loaded.steps[0].description.startswith("Open")
-    assert loaded.steps[1].screenshot_after == "001-step.png"
+    assert loaded.steps[1].screenshot_after == "002-vision-input.png"
     assert loaded.final_summary == "ok"
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert raw["recipe_version"] == 1

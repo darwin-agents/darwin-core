@@ -17,6 +17,8 @@ dev = [
     "pytest>=8.0.0",
     "ruff>=0.6.0",
 ]
+# Optional: decode verification QR URLs from HIL screenshots (``DARWIN_WEB_DECODE_QR=1``)
+telegram_qr = ["opencv-python-headless>=4.8.0,<5"]
 
 [project.scripts]
 darwin-core = "darwin_core.main:main"

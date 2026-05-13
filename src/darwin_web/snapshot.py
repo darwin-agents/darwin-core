@@ -25,6 +25,54 @@ def safe_page_url(page: Page) -> str:
         return ""
 
 
+_ALERT_DIGEST_JS = r"""() => {
+  const seen = new Set();
+  const parts = [];
+  function add(el) {
+    if (seen.has(el)) return;
+    const st = window.getComputedStyle(el);
+    if (st.visibility === "hidden" || st.display === "none") return;
+    let t = "";
+    try {
+      t = (el.innerText || "").trim().replace(/\s+/g, " ");
+    } catch (e) {
+      return;
+    }
+    if (t.length < 4 || t.length > 280) return;
+    seen.add(el);
+    parts.push(t);
+  }
+  document.querySelectorAll('[role="alert"]').forEach(add);
+  // Only assertive live regions: polite is used for benign status (e.g. footer language
+  // comboboxes) and must not be surfaced as "page alerts" to the planner.
+  document.querySelectorAll('[aria-live="assertive"]').forEach((el) => {
+    if (parts.length >= 6) return;
+    add(el);
+  });
+  return parts.slice(0, 5).join(" | ");
+}"""
+
+
+def page_alert_digest(page: Page, *, max_chars: int = 420) -> str:
+    """Short visible validation / live-region text for the planner (does not depend on vision)."""
+    try:
+        if page.is_closed():
+            return ""
+        raw = page.evaluate(_ALERT_DIGEST_JS)
+    except (TargetClosedError, RuntimeError, OSError):
+        return ""
+    except Exception:  # noqa: BLE001
+        return ""
+    if not isinstance(raw, str):
+        return ""
+    s = raw.strip()
+    if not s:
+        return ""
+    if len(s) > max_chars:
+        return s[: max_chars - 1] + "…"
+    return s
+
+
 _DEEP_CLEAR_REFS_JS = r"""() => {
   const attrName = "data-darwin-web-ref";
   function clearRefs(root) {
@@ -131,6 +179,12 @@ def clear_refs(page: Page) -> None:
 def page_snapshot(page: Page, *, max_items: int = 128) -> tuple[list[dict[str, Any]], str]:
     """Return (element descriptors, page url). Clears stale refs before tagging."""
     try:
+        # Single-page apps often update the URL before the DOM list catches up; a short settle
+        # reduces mismatches between ``URL:`` and the interactive element list.
+        try:
+            page.wait_for_timeout(250)
+        except Exception:  # noqa: BLE001
+            pass
         clear_refs(page)
         raw = page.evaluate(_SNAPSHOT_JS)
         url = safe_page_url(page)
@@ -172,5 +226,12 @@ def snapshot_prompt_block(items: list[dict[str, Any]], url: str, title: str) -> 
         "- Native <select>: use select_option (or fill). Custom combobox / listbox: click to open if closed; when "
         'role=option rows appear (or the list is open), use pick_option with {"op":"pick_option","label":"<visible text>"} '
         "or click the option ref. Avoid re-clicking the combobox trigger while the menu is open.\n"
+        "- If the URL line and the listed controls look inconsistent (URL suggests a new step but controls match an older "
+        "screen), trust the **screenshot** as ground truth; you may use wait_ms once for the UI to settle, then act on what "
+        "is visible.\n"
+        "- If a **Visible page alerts/errors** line appears below, treat it as authoritative for validation state (wrong code, "
+        "taken username, etc.).\n"
+        "- **Email/SMS verification codes** are not available to you from the browser session: do not invent codes; use "
+        "**request_human** when a real code is required, or change strategy (Back / different email path).\n"
     )
     return header + body + footer

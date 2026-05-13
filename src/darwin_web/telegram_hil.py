@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 _LAST_UPDATE_ID: int = 0
+_LAST_OWNER_TELEGRAM_REPLY: str | None = None
 
 _CONTINUE_MARKERS = frozenset(
     {
@@ -24,6 +25,81 @@ _CONTINUE_MARKERS = frozenset(
         "go",
     }
 )
+
+
+def _is_owner_continue_message(text: str) -> bool:
+    """True for owner replies that mean \"resume\" (supports ``/continue@BotName`` Telegram form)."""
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    first = t.split()[0]
+    cmd = first.split("@", 1)[0]
+    if cmd in _CONTINUE_MARKERS:
+        return True
+    return t in _CONTINUE_MARKERS
+
+
+def consume_last_owner_telegram_reply() -> str | None:
+    """Pop the last owner Telegram text queued after ``request_human`` (one-shot for the next planner turn)."""
+    global _LAST_OWNER_TELEGRAM_REPLY  # noqa: PLW0603
+    r = _LAST_OWNER_TELEGRAM_REPLY
+    _LAST_OWNER_TELEGRAM_REPLY = None
+    return r
+
+
+def _set_last_owner_reply(text: str | None) -> None:
+    global _LAST_OWNER_TELEGRAM_REPLY  # noqa: PLW0603
+    _LAST_OWNER_TELEGRAM_REPLY = text
+
+
+def _telegram_strict_continue_only() -> bool:
+    """When true, only ``/continue``-style commands end the wait; default is any text (natural language)."""
+    v = os.getenv("DARWIN_WEB_TELEGRAM_STRICT_CONTINUE", "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _owner_message_ends_wait(text: str) -> bool:
+    if not (text or "").strip():
+        return False
+    if _telegram_strict_continue_only():
+        return _is_owner_continue_message(text)
+    return True
+
+
+def try_decode_http_qr_from_png(path: Path) -> str | None:
+    """If ``DARWIN_WEB_DECODE_QR`` is enabled and OpenCV is installed, return first HTTP(S) string from a QR in the PNG.
+
+    The browser address bar URL is often **not** the same as the URL encoded in a verification QR; decoding the
+    screenshot can surface the mobile link. Optional dependency: ``opencv-python-headless`` (see ``telegram_qr`` extra).
+    """
+    gate = os.getenv("DARWIN_WEB_DECODE_QR", "0").strip().lower()
+    if gate not in ("1", "true", "yes", "on"):
+        return None
+    if not path.is_file():
+        return None
+    try:
+        import cv2  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    try:
+        img = cv2.imread(str(path))
+        if img is None:
+            return None
+        det = cv2.QRCodeDetector()
+        out = det.detectAndDecode(img)
+        val = ""
+        if isinstance(out, tuple) and len(out) >= 1 and isinstance(out[0], str):
+            val = out[0]
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(val, str):
+        return None
+    s = val.strip()
+    if not s:
+        return None
+    if s.startswith(("http://", "https://")):
+        return s[:2000]
+    return None
 
 
 def telegram_hil_env_enabled() -> bool:
@@ -88,6 +164,40 @@ def _tg_ok(resp: httpx.Response) -> bool:
     return isinstance(data, dict) and bool(data.get("ok"))
 
 
+def send_telegram_decoded_qr_link(
+    client: httpx.Client,
+    *,
+    base: str,
+    chat_id: str,
+    decoded_url: str,
+) -> str | None:
+    """Send mobile URL as tappable HTML link plus a plain-text duplicate (``<code>`` URLs are not clickable)."""
+    u = decoded_url.strip()
+    if not u:
+        return None
+    if len(u) > 4000:
+        u = u[:4000]
+    href_esc = html.escape(u, quote=True)
+    html_msg = (
+        "<b>Mobile link from QR</b> (tap below). If it does not open, use the next message which is plain text.\n"
+        f'<a href="{href_esc}">Open on phone</a>'
+    )
+    for part in _chunk_text(html_msg, 4096):
+        rq = client.post(
+            f"{base}/sendMessage",
+            json={"chat_id": chat_id, "text": part, "parse_mode": "HTML"},
+        )
+        if not _tg_ok(rq):
+            return f"telegram sendMessage HTTP {rq.status_code}"
+    rp = client.post(
+        f"{base}/sendMessage",
+        json={"chat_id": chat_id, "text": u},
+    )
+    if not _tg_ok(rp):
+        return f"telegram sendMessage (plain URL) HTTP {rp.status_code}"
+    return None
+
+
 def notify_owner_request_human(
     *,
     reason: str,
@@ -110,12 +220,14 @@ def notify_owner_request_human(
     er = html.escape(reason.strip(), quote=False)
     eu = html.escape(page_url.strip(), quote=False)
     ei = html.escape(instructions.strip(), quote=False)
+    # Keep Telegram content aligned with the planner: reason + instructions first; no generic QR boilerplate here.
     header = (
-        "<b>darwin_web — human step required</b>\n\n"
-        f"<b>Reason:</b> {er}\n"
-        f"<b>Page:</b> {eu}\n\n"
-        "<b>Instructions:</b>"
+        "<b>darwin_web — human input</b>\n\n"
+        f"<b>Reason:</b> {er}\n\n"
+        f"<b>Instructions (from planner):</b>\n{ei}"
     )
+    if page_url.strip():
+        header += f"\n\n<b>Page URL</b> (reference only):\n<code>{eu}</code>"
 
     own_client = client is None
     hc = httpx.Client(timeout=httpx.Timeout(90.0, connect=15.0))
@@ -137,7 +249,7 @@ def notify_owner_request_human(
                     f"{base}/sendPhoto",
                     data={
                         "chat_id": chat_raw,
-                        "caption": "Current page (screenshot)",
+                        "caption": "Screenshot of the page the agent is on.",
                         "parse_mode": "HTML",
                     },
                     files={"photo": (image_path.name, f, "image/png")},
@@ -145,31 +257,40 @@ def notify_owner_request_human(
             if not _tg_ok(r1):
                 return f"telegram sendPhoto HTTP {r1.status_code}"
 
-        for part in _chunk_text(ei, 4096):
-            r2 = c.post(
-                f"{base}/sendMessage",
-                json={"chat_id": chat_raw, "text": part, "parse_mode": "HTML"},
-            )
-            if not _tg_ok(r2):
-                return f"telegram sendMessage HTTP {r2.status_code}"
+            decoded = try_decode_http_qr_from_png(image_path)
+            if decoded:
+                qr_err = send_telegram_decoded_qr_link(
+                    c, base=base, chat_id=chat_raw, decoded_url=decoded
+                )
+                if qr_err:
+                    return qr_err
 
-        hint = (
-            "Reply with <code>/continue</code> (or <code>done</code>) in this chat when you have "
-            "finished on the browser so the agent can resume."
-        )
         if wait_for_owner:
+            if _telegram_strict_continue_only():
+                hint = (
+                    "Reply with <code>/continue</code> (or <code>done</code>) when the browser tab is ready for the agent "
+                    "to continue."
+                )
+            else:
+                hint = (
+                    "Reply in <b>plain language</b> to tell the agent what to do (language choice, OTP, corrections, "
+                    "etc.). The next planner turn will see your message. You can also send <code>/continue</code> when "
+                    "the tab is already in the right state and no extra instructions are needed."
+                )
             r3 = c.post(
                 f"{base}/sendMessage",
                 json={"chat_id": chat_raw, "text": hint, "parse_mode": "HTML"},
             )
             if not _tg_ok(r3):
                 return f"telegram sendMessage HTTP {r3.status_code}"
-            _wait_for_owner_message(
+            reply = _wait_for_owner_message(
                 c,
                 token=token,
                 chat_id_filter=chat_raw,
                 max_wait_s=max_wait_s,
             )
+            if reply:
+                _set_last_owner_reply(reply[:4000])
         return None
     except httpx.HTTPError as exc:
         return f"telegram HTTP: {exc}"
@@ -184,7 +305,8 @@ def _wait_for_owner_message(
     token: str,
     chat_id_filter: str,
     max_wait_s: float,
-) -> None:
+) -> str | None:
+    """Block until the owner sends a text message that ends the wait; return that text (trimmed) or ``None`` on timeout."""
     global _LAST_UPDATE_ID  # noqa: PLW0603
     deadline = time.monotonic() + max(1.0, float(max_wait_s))
     base = _bot_base(token)
@@ -235,9 +357,6 @@ def _wait_for_owner_message(
             text = msg.get("text")
             if not isinstance(text, str):
                 continue
-            key = text.strip().lower()
-            if not key:
-                continue
-            first = key.split()[0] if key else ""
-            if key in _CONTINUE_MARKERS or first in _CONTINUE_MARKERS:
-                return
+            if _owner_message_ends_wait(text):
+                return text.strip()[:4000]
+    return None

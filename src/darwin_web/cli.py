@@ -39,12 +39,19 @@ def _build_agent_parser() -> argparse.ArgumentParser:
         "--artifacts-dir",
         type=Path,
         default=Path(os.getenv("DARWIN_WEB_ARTIFACTS_DIR", "artifacts/darwin-web")),
-        help="Screenshots (*-step.png, *-vision-input.png), merged *-llm-turn.yaml (prompt + response + planner), playbook copy, etc.",
+        help="Artifacts (*-vision-input.png, *-llm-turn.yaml), playbook copy, etc.",
     )
     p.add_argument(
         "--no-vision",
         action="store_true",
         help="Do not attach page screenshot to the planner LLM (overrides DARWIN_WEB_VISION).",
+    )
+    p.add_argument(
+        "--proxy-country",
+        default=None,
+        metavar="CODE",
+        help="Browser Use proxy country (ISO 3166-1 alpha-2), e.g. es for Spain. "
+        "Default: BROWSER_USE_PROXY_COUNTRY_CODE from the environment.",
     )
     return p
 
@@ -63,6 +70,13 @@ def _build_replay_parser() -> argparse.ArgumentParser:
         default=int(os.getenv("DARWIN_WEB_REPLAY_PAUSE_MS", "0")),
         help="Optional pause between steps (milliseconds).",
     )
+    p.add_argument(
+        "--proxy-country",
+        default=None,
+        metavar="CODE",
+        help="Browser Use proxy country (ISO 3166-1 alpha-2), e.g. es for Spain. "
+        "Default: BROWSER_USE_PROXY_COUNTRY_CODE from the environment.",
+    )
     return p
 
 
@@ -70,7 +84,7 @@ def main_agent(argv: list[str] | None = None) -> int:
     load_dotenv()
     args = _build_agent_parser().parse_args(argv)
     llm = OpenRouterClient()
-    cdp = request_cdp_url(args.server_url)
+    cdp = request_cdp_url(args.server_url, proxy_country_code=args.proxy_country)
 
     with sync_playwright() as pw:
         browser = pw.chromium.connect_over_cdp(cdp)
@@ -106,7 +120,7 @@ def main_replay(argv: list[str] | None = None) -> int:
     load_dotenv()
     args = _build_replay_parser().parse_args(argv)
     pb = Playbook.read(args.playbook)
-    cdp = request_cdp_url(args.server_url)
+    cdp = request_cdp_url(args.server_url, proxy_country_code=args.proxy_country)
 
     with sync_playwright() as pw:
         browser = pw.chromium.connect_over_cdp(cdp)

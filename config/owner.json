@@ -1,12 +1,10 @@
 {
-  "email": "you@example.com",
-  "password": "your-secret",
-  "first_name": "Ada",
-  "last_name": "Lovelace",
-  "phone": "5551234567",
-  "birth_day": "10",
+  "email": "alexcollsoutumuro@gmail.com",
+  "phone": "+34609873220",
+  "first_name": "Alex",
+  "last_name": "Darwin",
+  "birth_day": "19",
   "birth_month": "December",
-  "birth_year": "1815",
-  "gender": "Female",
-  "generic_text": "Ada"
+  "birth_year": "1991",
+  "gender": "Male"
 }
