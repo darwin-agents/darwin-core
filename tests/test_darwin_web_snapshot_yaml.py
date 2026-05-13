@@ -1,0 +1,14 @@
+from __future__ import annotations
+
+import yaml
+
+from darwin_web.snapshot import snapshot_items_yaml
+
+
+def test_snapshot_items_yaml_roundtrips_list() -> None:
+    items = [{"ref": 1, "tag": "button", "text": "Next", "value": ""}]
+    dumped = snapshot_items_yaml(items)
+    loaded = yaml.safe_load(dumped)
+    assert isinstance(loaded, list)
+    assert loaded[0]["ref"] == 1
+    assert loaded[0]["tag"] == "button"

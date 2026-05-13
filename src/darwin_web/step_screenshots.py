@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from playwright.sync_api import Page
+
+
+def write_step_png(page: Page, artifacts_dir: Path, step_index: int) -> Path | None:
+    """Save ``{index:03d}-step.png`` (full page). Returns path on success."""
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    path = artifacts_dir / f"{step_index:03d}-step.png"
+    try:
+        page.screenshot(path=str(path), full_page=True)
+    except Exception:
+        return None
+    return path
+
+
+def write_vision_input_png(page: Page, artifacts_dir: Path, step_index: int) -> Path | None:
+    """Save ``{index:03d}-vision-input.png`` — page state before the planner call (for multimodal LLM)."""
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    path = artifacts_dir / f"{step_index:03d}-vision-input.png"
+    try:
+        page.screenshot(path=str(path), full_page=True)
+    except Exception:
+        return None
+    return path
