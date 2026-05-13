@@ -1,0 +1,12 @@
+{
+  "email": "you@example.com",
+  "password": "your-secret",
+  "first_name": "Ada",
+  "last_name": "Lovelace",
+  "phone": "5551234567",
+  "birth_day": "10",
+  "birth_month": "December",
+  "birth_year": "1815",
+  "gender": "Female",
+  "generic_text": "Ada"
+}
