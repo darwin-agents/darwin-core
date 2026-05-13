@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
+from darwin_core.servers.browser_use.client import browser_connect_json_body
 from darwin_core.services.llm.openrouter import OpenRouterService
 
 from .session import run_web_navigation
@@ -49,13 +50,21 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="JSON file with the human owner's identity for form auto-fill (or set OPENROUTER_WEB_OWNER_PROFILE).",
     )
+    parser.add_argument(
+        "--proxy-country",
+        default=None,
+        metavar="CODE",
+        help="Browser Use proxy country (ISO 3166-1 alpha-2), e.g. es for Spain. "
+        "Default: BROWSER_USE_PROXY_COUNTRY_CODE from the environment.",
+    )
     return parser
 
 
-def request_cdp_url(server_url: str) -> str:
+def request_cdp_url(server_url: str, *, proxy_country_code: str | None = None) -> str:
+    body = browser_connect_json_body(proxy_country_code=proxy_country_code)
     response = httpx.post(
         f"{server_url.rstrip('/')}/browser/connect",
-        json={},
+        json=body,
         timeout=20.0,
     )
     response.raise_for_status()
@@ -80,7 +89,7 @@ def main() -> None:
         )
     owner_profile: WebOwnerProfile = load_web_owner_profile(args.owner_profile)
 
-    cdp_ws_url = request_cdp_url(args.server_url)
+    cdp_ws_url = request_cdp_url(args.server_url, proxy_country_code=args.proxy_country)
     service = OpenRouterService()
     artifacts_dir = Path(args.artifacts_dir)
     recipes_dir = Path(args.recipes_dir)

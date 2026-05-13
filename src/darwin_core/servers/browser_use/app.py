@@ -14,7 +14,7 @@ app = FastAPI(title="Browser Use Server", version="0.1.0")
 class BrowserConnectRequest(BaseModel):
     proxy_country_code: str | None = Field(
         default=None,
-        description="Optional proxy country code, e.g. us, de, br.",
+        description="Optional proxy country (ISO 3166-1 alpha-2), e.g. es Spain, us US, de Germany.",
     )
     profile_id: str | None = Field(default=None, description="Optional Browser Use profile ID.")
     timeout_seconds: int | None = Field(
