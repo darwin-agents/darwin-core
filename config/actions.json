@@ -1,0 +1,158 @@
+[
+  {
+    "name": "create_email_account",
+    "description": "Create/register a new email account"
+  },
+  {
+    "name": "register_platform_account",
+    "description": "Register a new platform account"
+  },
+  {
+    "name": "login_to_account",
+    "description": "Log into an existing account"
+  },
+  {
+    "name": "logout_of_account",
+    "description": "Log out of an account"
+  },
+  {
+    "name": "update_profile_information",
+    "description": "Update profile information"
+  },
+  {
+    "name": "change_password",
+    "description": "Change or reset password"
+  },
+  {
+    "name": "manage_subscriptions",
+    "description": "Manage subscription settings"
+  },
+  {
+    "name": "create_post",
+    "description": "Create a new post"
+  },
+  {
+    "name": "publish_article",
+    "description": "Draft and publish an article"
+  },
+  {
+    "name": "make_comment",
+    "description": "Make a comment"
+  },
+  {
+    "name": "reply_to_thread",
+    "description": "Reply to a discussion thread"
+  },
+  {
+    "name": "upload_media",
+    "description": "Upload a file, image, or video"
+  },
+  {
+    "name": "edit_post",
+    "description": "Edit an existing post"
+  },
+  {
+    "name": "delete_content",
+    "description": "Delete content"
+  },
+  {
+    "name": "perform_search",
+    "description": "Perform a search engine query"
+  },
+  {
+    "name": "scrape_webpage_data",
+    "description": "Scrape text or data from a webpage"
+  },
+  {
+    "name": "download_file",
+    "description": "Download a file or document"
+  },
+  {
+    "name": "extract_structured_data",
+    "description": "Extract structured data, such as tables or product prices"
+  },
+  {
+    "name": "monitor_webpage_changes",
+    "description": "Monitor a webpage for specific changes or updates"
+  },
+  {
+    "name": "take_screenshot",
+    "description": "Take a screenshot of a webpage"
+  },
+  {
+    "name": "like_post",
+    "description": "Like or upvote a post"
+  },
+  {
+    "name": "share_content",
+    "description": "Share, retweet, or repost content"
+  },
+  {
+    "name": "follow_user",
+    "description": "Follow or unfollow a user profile"
+  },
+  {
+    "name": "send_direct_message",
+    "description": "Send a direct message"
+  },
+  {
+    "name": "manage_connection_request",
+    "description": "Accept or decline a connection request"
+  },
+  {
+    "name": "search_product",
+    "description": "Search for a product"
+  },
+  {
+    "name": "add_to_cart",
+    "description": "Add an item to the shopping cart"
+  },
+  {
+    "name": "remove_from_cart",
+    "description": "Remove an item from the cart"
+  },
+  {
+    "name": "apply_promo_code",
+    "description": "Apply a promo code or coupon"
+  },
+  {
+    "name": "checkout_cart",
+    "description": "Proceed through the checkout process"
+  },
+  {
+    "name": "fill_shipping_billing",
+    "description": "Fill out shipping and billing forms"
+  },
+  {
+    "name": "track_order",
+    "description": "Track the status of an order"
+  },
+  {
+    "name": "click_element",
+    "description": "Click a button, link, or icon"
+  },
+  {
+    "name": "submit_form",
+    "description": "Fill out and submit a form"
+  },
+  {
+    "name": "select_dropdown_option",
+    "description": "Select an option from a dropdown menu"
+  },
+  {
+    "name": "toggle_checkbox",
+    "description": "Toggle a checkbox or radio button"
+  },
+  {
+    "name": "scroll_page",
+    "description": "Scroll up, down, left, or right on a page"
+  },
+  {
+    "name": "switch_tabs",
+    "description": "Switch between browser tabs"
+  },
+  {
+    "name": "hover_element",
+    "description": "Hover over an element to trigger a menu"
+  }
+]

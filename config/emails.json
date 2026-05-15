@@ -1,17 +1,17 @@
 [
   {
-    "provider": "Mailfence",
-    "country": "Belgium",
-    "url": "https://mailfence.com",
-    "bot_difficulty": "Low",
-    "notes": "Privacy-focused provider that often allows registration without phone verification. High success rate for script-based account creation when using clean residential IPs.[cite: 1]"
-  },
-  {
     "provider": "Inbox.lv",
     "country": "Latvia",
     "url": "https://www.inbox.lv",
     "bot_difficulty": "Low-Medium",
     "notes": "A regional European provider that is often overlooked. Registration is straightforward, though they have begun implementing stricter anti-bot checks for non-European IP addresses.[cite: 1]"
+  },
+  {
+    "provider": "Mailfence",
+    "country": "Belgium",
+    "url": "https://mailfence.com",
+    "bot_difficulty": "Low-Medium",
+    "notes": "Privacy-focused provider that often allows registration without phone verification. High success rate for script-based account creation when using clean residential IPs.[cite: 1]"
   },
   {
     "provider": "Mail.com / GMX",
