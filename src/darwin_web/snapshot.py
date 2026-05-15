@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from playwright._impl._errors import Error as PlaywrightError
 from playwright._impl._errors import TargetClosedError
 
 if TYPE_CHECKING:
@@ -12,6 +14,10 @@ if TYPE_CHECKING:
 
 class PageClosed(RuntimeError):
     """The Playwright page (or browser session) is no longer attached — common with remote CDP."""
+
+
+class PageNavigating(RuntimeError):
+    """Snapshot/evaluate failed because the document navigated before extraction finished."""
 
 
 def safe_page_url(page: Page) -> str:
@@ -23,6 +29,77 @@ def safe_page_url(page: Page) -> str:
         return u if isinstance(u, str) else ""
     except (TargetClosedError, RuntimeError, OSError):
         return ""
+
+
+def _page_is_open(page: Page) -> bool:
+    try:
+        return not page.is_closed()
+    except (TargetClosedError, RuntimeError, OSError):
+        return False
+
+
+def open_page_ids(page: Page) -> set[int]:
+    """``id()`` of each open tab in the page's browser context."""
+    try:
+        ctx = page.context
+    except (TargetClosedError, RuntimeError, OSError) as exc:
+        raise PageClosed(
+            "Browser page, context, or CDP session was closed (remote tab ended or disconnected)."
+        ) from exc
+    return {id(p) for p in ctx.pages if _page_is_open(p)}
+
+
+def _pick_best_page(candidates: list[Page]) -> Page:
+    non_blank = [p for p in candidates if safe_page_url(p) not in ("", "about:blank")]
+    pool = non_blank if non_blank else candidates
+    return pool[-1]
+
+
+def resolve_live_page(
+    page: Page,
+    *,
+    pages_before: set[int] | None = None,
+    allow_spawn: bool = True,
+) -> Page:
+    """Return an open page in the same browser context.
+
+    When navigation or ``target=_blank`` closes the current tab, Playwright keeps other
+    pages on the context — callers should replace their ``page`` handle with the return value.
+
+    If *pages_before* is set (from :func:`open_page_ids` immediately before an action), any tab
+    opened during that action is preferred over the stale handle.
+    """
+    try:
+        ctx = page.context
+    except (TargetClosedError, RuntimeError, OSError) as exc:
+        raise PageClosed(
+            "Browser page, context, or CDP session was closed (remote tab ended or disconnected)."
+        ) from exc
+
+    candidates: list[Page] = []
+    for candidate in ctx.pages:
+        if _page_is_open(candidate):
+            candidates.append(candidate)
+
+    if pages_before is not None:
+        new_tabs = [p for p in candidates if id(p) not in pages_before]
+        if new_tabs:
+            return _pick_best_page(new_tabs)
+
+    if _page_is_open(page):
+        return page
+
+    if not candidates:
+        if allow_spawn:
+            try:
+                fresh = ctx.new_page()
+                if _page_is_open(fresh):
+                    return fresh
+            except (TargetClosedError, RuntimeError, OSError):
+                pass
+        raise PageClosed("Cannot snapshot: page is already closed.")
+
+    return _pick_best_page(candidates)
 
 
 _ALERT_DIGEST_JS = r"""() => {
@@ -114,19 +191,28 @@ _SNAPSHOT_JS = r"""
     });
   }
   collect(document);
-  const nodes = acc;
   const items = [];
-  let idx = 0;
+  const idxRef = { idx: 0 };
   const margin = 120;
-  for (const el of nodes) {
+
+  function pushItem(el, opts) {
+    if (el.hasAttribute(attrName)) return;
+    const skipViewport = opts && opts.skipViewport;
     const rect = el.getBoundingClientRect();
     const st = window.getComputedStyle(el);
-    if (rect.width < 1 || rect.height < 1) continue;
+    if (rect.width < 1 || rect.height < 1) return;
     if (st.visibility === "hidden" || st.display === "none" || st.pointerEvents === "none")
-      continue;
-    if (rect.bottom < -margin || rect.top > innerHeight + margin) continue;
-    idx += 1;
-    el.setAttribute(attrName, String(idx));
+      return;
+    const roleLc = (el.getAttribute("role") || "").toLowerCase();
+    if (
+      !skipViewport &&
+      roleLc !== "option" &&
+      roleLc !== "menuitem" &&
+      (rect.bottom < -margin || rect.top > innerHeight + margin)
+    )
+      return;
+    idxRef.idx += 1;
+    el.setAttribute(attrName, String(idxRef.idx));
     const tag = el.tagName.toLowerCase();
     const type = el.getAttribute("type") || "";
     const name = el.getAttribute("name") || "";
@@ -144,8 +230,8 @@ _SNAPSHOT_JS = r"""
     const ariaExpanded = el.getAttribute("aria-expanded") || "";
     const ariaHaspopup = el.getAttribute("aria-haspopup") || "";
     const value = "value" in el ? String(el.value || "").slice(0, 80) : "";
-    items.push({
-      ref: idx,
+    const row = {
+      ref: idxRef.idx,
       tag,
       type,
       name,
@@ -158,11 +244,68 @@ _SNAPSHOT_JS = r"""
       value,
       aria_expanded: ariaExpanded,
       aria_haspopup: ariaHaspopup,
+    };
+    if (opts && opts.in_popup) row.in_popup = true;
+    items.push(row);
+  }
+
+  for (const el of acc) {
+    pushItem(el, null);
+  }
+
+  // Pass 2: rows inside open listbox/menu popups (often missed by viewport clipping).
+  function collectPopupRows(root) {
+    const panelSel =
+      '[role="listbox"], [role="menu"], [id*="listbox" i], [id*="Listbox"], [class*="ms-Callout"]';
+    root.querySelectorAll(panelSel).forEach((panel) => {
+      const pst = window.getComputedStyle(panel);
+      if (pst.display === "none" || pst.visibility === "hidden") return;
+      const pr = panel.getBoundingClientRect();
+      if (pr.width < 1 || pr.height < 1) return;
+      panel
+        .querySelectorAll(
+          '[role="option"], [role="menuitem"], [data-is-focusable="true"], li, button, div, span'
+        )
+        .forEach((row) => {
+          if (seen.has(row)) return;
+          const rst = window.getComputedStyle(row);
+          if (rst.display === "none" || rst.visibility === "hidden") return;
+          let t = "";
+          try {
+            t = (row.innerText || "").trim();
+          } catch (e) {
+            return;
+          }
+          if (t.length < 1 || t.length > 80) return;
+          seen.add(row);
+          pushItem(row, { skipViewport: true, in_popup: true });
+        });
+    });
+    root.querySelectorAll("*").forEach((el) => {
+      if (el.shadowRoot) collectPopupRows(el.shadowRoot);
     });
   }
+  collectPopupRows(document);
+
   return items;
 })()
 """
+
+
+def _is_transient_navigation_error(exc: BaseException) -> bool:
+    """True when evaluate/snapshot raced an in-flight navigation (SPA redirects, form POST, etc.)."""
+    msg = str(exc).lower()
+    return "execution context was destroyed" in msg or (
+        "navigation" in msg and ("destroyed" in msg or "detached" in msg)
+    )
+
+
+def _snapshot_nav_retry_attempts() -> int:
+    raw = os.getenv("DARWIN_WEB_SNAPSHOT_NAV_RETRIES", "4").strip()
+    try:
+        return max(1, min(int(raw), 8))
+    except ValueError:
+        return 4
 
 
 def clear_refs(page: Page) -> None:
@@ -174,31 +317,60 @@ def clear_refs(page: Page) -> None:
         raise PageClosed(
             "Browser page, context, or CDP session was closed (remote tab ended or disconnected)."
         ) from exc
+    except PlaywrightError as exc:
+        if _is_transient_navigation_error(exc):
+            raise PageNavigating(str(exc)) from exc
+        raise
 
 
 def page_snapshot(page: Page, *, max_items: int = 128) -> tuple[list[dict[str, Any]], str]:
     """Return (element descriptors, page url). Clears stale refs before tagging."""
-    try:
-        # Single-page apps often update the URL before the DOM list catches up; a short settle
-        # reduces mismatches between ``URL:`` and the interactive element list.
+    attempts = _snapshot_nav_retry_attempts()
+    last_nav: PageNavigating | None = None
+    page_in = page
+    for attempt in range(attempts):
+        page = resolve_live_page(page_in, allow_spawn=False)
         try:
-            page.wait_for_timeout(250)
-        except Exception:  # noqa: BLE001
-            pass
-        clear_refs(page)
-        raw = page.evaluate(_SNAPSHOT_JS)
-        url = safe_page_url(page)
-    except TargetClosedError as exc:
-        raise PageClosed(
-            "Browser page, context, or CDP session was closed (remote tab ended or disconnected)."
-        ) from exc
-    if not isinstance(raw, list):
-        return [], url
-    items: list[dict[str, Any]] = []
-    for entry in raw[:max_items]:
-        if isinstance(entry, dict):
-            items.append(entry)
-    return items, url
+            if attempt > 0:
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=8_000)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    page.wait_for_timeout(200 + 250 * attempt)
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                try:
+                    page.wait_for_timeout(250)
+                except Exception:  # noqa: BLE001
+                    pass
+            clear_refs(page)
+            raw = page.evaluate(_SNAPSHOT_JS)
+            url = safe_page_url(page)
+        except TargetClosedError as exc:
+            raise PageClosed(
+                "Browser page, context, or CDP session was closed (remote tab ended or disconnected)."
+            ) from exc
+        except PageNavigating as exc:
+            last_nav = exc
+            continue
+        except PlaywrightError as exc:
+            if _is_transient_navigation_error(exc) and attempt < attempts - 1:
+                last_nav = PageNavigating(str(exc))
+                continue
+            raise
+        else:
+            if not isinstance(raw, list):
+                return [], url
+            items: list[dict[str, Any]] = []
+            for entry in raw[:max_items]:
+                if isinstance(entry, dict):
+                    items.append(entry)
+            return items, url
+    if last_nav is not None:
+        raise last_nav
+    raise PageNavigating("page_snapshot failed after navigation retries")
 
 
 def snapshot_items_yaml(items: list[dict[str, Any]]) -> str:
