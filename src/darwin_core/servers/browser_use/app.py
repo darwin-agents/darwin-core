@@ -7,9 +7,14 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from darwin_core.servers.browser_use.api import create_browser_session, stop_browser_session
+from darwin_core.servers.browser_use.api import (
+    BrowserUseAPIError,
+    create_browser_session,
+    release_active_browser_sessions,
+    stop_browser_session,
+)
 
-app = FastAPI(title="Browser Use Server", version="0.2.0")
+app = FastAPI(title="Browser Use Server", version="0.2.1")
 
 
 class BrowserConnectRequest(BaseModel):
@@ -38,6 +43,13 @@ class BrowserDisconnectRequest(BaseModel):
     browser_id: str
 
 
+def _http_exception_from_api_error(exc: BrowserUseAPIError) -> HTTPException:
+    code = exc.status_code if exc.status_code is not None else 502
+    if code not in (400, 401, 403, 404, 409, 422, 429, 500, 502, 503):
+        code = 502
+    return HTTPException(status_code=code, detail=str(exc))
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -61,8 +73,8 @@ def browser_connect(payload: BrowserConnectRequest) -> BrowserConnectResponse:
             browser_screen_width=payload.browser_screen_width,
             browser_screen_height=payload.browser_screen_height,
         )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except BrowserUseAPIError as exc:
+        raise _http_exception_from_api_error(exc) from exc
 
     return BrowserConnectResponse(
         browser_id=session.browser_id,
@@ -76,9 +88,19 @@ def browser_disconnect(payload: BrowserDisconnectRequest) -> dict[str, str]:
     """Stop a browser session created by :func:`browser_connect`."""
     try:
         stop_browser_session(payload.browser_id)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except BrowserUseAPIError as exc:
+        raise _http_exception_from_api_error(exc) from exc
     return {"status": "stopped"}
+
+
+@app.post("/browser/release")
+def browser_release() -> dict[str, object]:
+    """Stop all active Browser Use cloud browsers for this API key (frees free-plan slots)."""
+    try:
+        stopped = release_active_browser_sessions()
+    except BrowserUseAPIError as exc:
+        raise _http_exception_from_api_error(exc) from exc
+    return {"status": "ok", "stopped": stopped, "count": len(stopped)}
 
 
 def main() -> None:
