@@ -23,11 +23,10 @@ telegram_qr = ["opencv-python-headless>=4.8.0,<5"]
 [project.scripts]
 darwin-core = "darwin_core.main:main"
 darwin-browser-use-server = "darwin_core.servers.browser_use.app:main"
-darwin-openrouter-web-agent = "darwin_core.agents.web.agent:main"
-darwin-web-agent = "darwin_web.cli:main_agent"
-darwin-web-replay = "darwin_web.cli:main_replay"
-darwin-web2-agent = "darwin_web2.cli:main_agent"
-darwin-web2-replay = "darwin_web2.cli:main_replay"
+darwin-web-agent = "darwin_core.agents.web.core.cli:main_agent"
+darwin-web-replay = "darwin_core.agents.web.core.cli:main_replay"
+darwin-web2-agent = "darwin_core.agents.web.core.cli:main_agent"
+darwin-web2-replay = "darwin_core.agents.web.core.cli:main_replay"
 
 [build-system]
 requires = ["hatchling"]
@@ -37,7 +36,7 @@ build-backend = "hatchling.build"
 package = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/darwin_core", "src/darwin_web", "src/darwin_web2"]
+packages = ["src/darwin_core"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
