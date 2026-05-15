@@ -2,19 +2,29 @@
 
 All notable changes to Darwin Core will be documented in this file.
 
-## [Unreleased]
+## [0.1.0] - Initial Release
 
-### Added
-- **Unified Configuration:** Standardized all environment variables to a clean `DARWIN_WEB_` prefix, completely cleaning up the `.env.example` configurations.
-- **Hierarchical Test Suite:** Organized over 120 tests into a mirrored sub-package hierarchy (`core`, `browser`, `execution`, `intelligence`, `integrations`, `playbook`, `security`) corresponding to the main `darwin_core` source tree.
+### Core Orchestration
+- **Resilient Web Agent Loop:** Implemented a robust `observe → plan → execute → verify` lifecycle for interacting with highly dynamic Single Page Applications.
+- **Self-Healing & Reflection:** Added automated state stagnation detection. The agent automatically detects when an action fails to advance the page and triggers a secondary `reflect` LLM pass to self-correct.
+- **Multimodal Observation:** Integrated full DOM parsing, Playwright accessibility tree (ARIA) generation, and visual screenshot attachments for the planner LLM.
+- **Automated Unsticking:** Included fallback logic to automatically bypass cookie consent banners and predictable blockers without consuming LLM reasoning tokens.
 
-### Changed
-- **Resilient Architecture Promotion:** Officially promoted the state-of-the-art, resilient `darwin_web2` architecture into `darwin_core/agents/web`. It is now the primary, default orchestration engine.
-- **Sub-package Modularization:** Reorganized the previously flat v2 architecture into cleanly separated architectural layers: `core`, `browser`, `execution`, `intelligence`, `integrations`, `playbook`, and `security`.
-- **Import Rewrite:** Refactored over 100 internal imports across the codebase to reflect the new nested sub-package syntax.
-- **Test Modernization:** Moved browser-agent tests under `tests/agents/web/` with names aligned to each sub-package (`browser`, `core`, `execution`, and so on).
+### Human-in-the-Loop (HIL)
+- **Telegram Integration:** Built a complete Telegram bot interface to pause agent execution when encountering CAPTCHAs or SMS OTP walls.
+- **Interactive Prompts:** The agent forwards screenshots of the blockage to Telegram and resumes execution using the human's natural language reply or OTP code.
+- **QR Code Decoding:** Added optional local QR decoding for HIL screenshots to send clickable HTTP links directly to Telegram.
 
-### Removed
-- **Legacy v1 Architecture:** Completely deleted the old heuristic-based `darwin_web` v1 orchestration code.
-- **Obsolete Wrappers:** Removed legacy wrapper scripts (`openrouter_web_agent.py`, `web_recipe_store.py`) and their corresponding tests that depended on the deprecated v1 `action_runtime`.
-- **Stale Dependencies:** Inlined critical browser connection payloads to fully decouple `darwin_web2` from any legacy `darwin_core` dependencies before the merger.
+### Playbooks & Execution
+- **YAML Playbooks:** Implemented a recording and replay engine that saves successful agent traces into structured YAML playbooks.
+- **Dynamic Credential Generation (`$GENHASH`):** Added deterministic, on-the-fly password and username generation for automated account signups, mapped directly to target domains.
+- **Credential Storage:** Automated extraction and append-only saving of successful account creations to local `accounts.jsonl`.
+- **Advanced Selectors:** Built resilient Playwright locator logic (handling text, placeholders, test-ids, and fallback ARIA roles) to interact with forms accurately.
+
+### Integrations & Environment
+- **Browser Use Bridge:** Integrated cloud-based browser session management (connect, reconnect, and automatic release on 429 errors).
+- **OpenRouter LLM Client:** Added a dedicated client for OpenRouter, handling JSON validation, schema coercion, and robust error retries.
+- **Email Provider Ranking:** Built a deterministic email provider routing system to automatically rotate through configured email domains (e.g., `config/emails.json`) during mass signups.
+
+### Security
+- **Artifact Redaction:** Implemented a comprehensive secrets-scrubbing engine to proactively redact `$GENHASH_PW` and explicit password fields from logs, DOM snapshots, and LLM turn artifacts.
