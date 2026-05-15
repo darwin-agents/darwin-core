@@ -37,7 +37,7 @@ _PROVIDER_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 def default_emails_config_path() -> Path:
     raw = os.getenv(
-        "DARWIN_WEB2_EMAILS_CONFIG",
+        "DARWIN_WEB_EMAILS_CONFIG",
         str(Path(__file__).resolve().parents[2] / "config" / "emails.json"),
     )
     return Path(raw)
@@ -325,7 +325,7 @@ def next_provider_goto_url(
 
 def registration_stagnation_advance_steps() -> int:
     """Layout-unchanged steps on a registration URL before auto ``goto`` next provider."""
-    raw = os.getenv("DARWIN_WEB2_PROVIDER_ADVANCE_STEPS", "5").strip()
+    raw = os.getenv("DARWIN_WEB_PROVIDER_ADVANCE_STEPS", "5").strip()
     try:
         n = int(raw, 10)
     except ValueError:

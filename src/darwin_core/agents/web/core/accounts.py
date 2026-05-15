@@ -10,7 +10,7 @@ from typing import Any
 def default_accounts_path() -> Path:
     import os
 
-    raw = os.getenv("DARWIN_WEB2_ACCOUNTS_PATH", "artifacts/darwin-web2/accounts.jsonl")
+    raw = os.getenv("DARWIN_WEB_ACCOUNTS_PATH", "artifacts/darwin-web/accounts.jsonl")
     return Path(raw)
 
 

@@ -44,7 +44,7 @@ def _max_chars(env_key: str, default: int) -> int:
 
 def page_aria_snapshot(page: Page) -> str:
     """Playwright accessibility tree (YAML-like text). Empty string if unavailable."""
-    cap = _max_chars("DARWIN_WEB2_ARIA_SNAPSHOT_MAX_CHARS", 16_000)
+    cap = _max_chars("DARWIN_WEB_ARIA_SNAPSHOT_MAX_CHARS", 16_000)
     try:
         raw = page.locator("body").aria_snapshot()
     except (TargetClosedError, RuntimeError, OSError):
@@ -61,7 +61,7 @@ def page_aria_snapshot(page: Page) -> str:
 
 def page_form_html_snippet(page: Page) -> str:
     """HTML inside main/form/dialog (scripts/styles stripped), for debugging custom widgets."""
-    cap = _max_chars("DARWIN_WEB2_FORM_HTML_MAX_CHARS", 12_000)
+    cap = _max_chars("DARWIN_WEB_FORM_HTML_MAX_CHARS", 12_000)
     try:
         raw = page.evaluate(_FORM_HTML_JS)
     except (TargetClosedError, RuntimeError, OSError):
@@ -77,8 +77,8 @@ def page_form_html_snippet(page: Page) -> str:
 
 
 def snapshot_prompt_item_limit() -> int:
-    return _max_chars("DARWIN_WEB2_SNAPSHOT_PROMPT_ITEMS", 128) or 128
+    return _max_chars("DARWIN_WEB_SNAPSHOT_PROMPT_ITEMS", 128) or 128
 
 
 def snapshot_artifact_item_limit() -> int:
-    return _max_chars("DARWIN_WEB2_SNAPSHOT_ARTIFACT_ITEMS", 512) or 512
+    return _max_chars("DARWIN_WEB_SNAPSHOT_ARTIFACT_ITEMS", 512) or 512

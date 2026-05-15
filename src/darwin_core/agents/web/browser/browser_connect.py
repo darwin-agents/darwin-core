@@ -61,7 +61,7 @@ def request_browser_release(
 def release_on_start_default() -> bool:
     """Whether agent CLI should release stale sessions before connect."""
     v = os.getenv(
-        "DARWIN_WEB2_RELEASE_ON_START",
+        "DARWIN_WEB_RELEASE_ON_START",
         os.getenv("BROWSER_USE_RELEASE_ON_START", "1"),
     ).strip().lower()
     return v not in ("0", "false", "no", "off")

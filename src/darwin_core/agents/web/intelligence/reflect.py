@@ -1,4 +1,4 @@
-"""Optional second LLM pass when verify reports problems (DARWIN_WEB2_REFLECT=1)."""
+"""Optional second LLM pass when verify reports problems (DARWIN_WEB_REFLECT=1)."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class _ReflectLLM(Protocol):
 
 
 def reflect_enabled() -> bool:
-    v = os.getenv("DARWIN_WEB2_REFLECT", "").strip().lower()
+    v = os.getenv("DARWIN_WEB_REFLECT", "").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 

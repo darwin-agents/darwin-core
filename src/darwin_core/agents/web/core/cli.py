@@ -31,7 +31,7 @@ def _build_agent_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--max-steps",
         type=int,
-        default=int(os.getenv("DARWIN_WEB2_MAX_STEPS", os.getenv("DARWIN_WEB_MAX_STEPS", "32"))),
+        default=int(os.getenv("DARWIN_WEB_MAX_STEPS", "32")),
         help="Maximum planner turns.",
     )
     p.add_argument(
@@ -42,20 +42,20 @@ def _build_agent_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--playbook-out",
         type=Path,
-        default=Path(os.getenv("DARWIN_WEB2_PLAYBOOK_OUT", "artifacts/darwin-web2/playbook.yaml")),
+        default=Path(os.getenv("DARWIN_WEB_PLAYBOOK_OUT", "artifacts/darwin-web/playbook.yaml")),
         help="Where to write the v2 YAML playbook.",
     )
     p.add_argument(
         "--artifacts-dir",
         type=Path,
-        default=Path(os.getenv("DARWIN_WEB2_ARTIFACTS_DIR", "artifacts/darwin-web2")),
+        default=Path(os.getenv("DARWIN_WEB_ARTIFACTS_DIR", "artifacts/darwin-web")),
         help="Turn artifacts (*-llm-turn-v2.yaml, *-vision-input.png).",
     )
     p.add_argument(
         "--accounts-path",
         type=Path,
         default=None,
-        help="Override DARWIN_WEB2_ACCOUNTS_PATH for JSONL account records.",
+        help="Override DARWIN_WEB_ACCOUNTS_PATH for JSONL account records.",
     )
     p.add_argument(
         "--emails-config",
@@ -78,7 +78,7 @@ def _build_agent_parser() -> argparse.ArgumentParser:
         "--release-sessions",
         action="store_true",
         default=None,
-        help="POST /browser/release before connect (default: DARWIN_WEB2_RELEASE_ON_START or on).",
+        help="POST /browser/release before connect (default: DARWIN_WEB_RELEASE_ON_START or on).",
     )
     p.add_argument(
         "--no-release-sessions",
@@ -99,7 +99,7 @@ def _build_replay_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--step-pause-ms",
         type=int,
-        default=int(os.getenv("DARWIN_WEB2_REPLAY_PAUSE_MS", "0")),
+        default=int(os.getenv("DARWIN_WEB_REPLAY_PAUSE_MS", "0")),
         help="Pause between steps (ms).",
     )
     p.add_argument(
@@ -222,7 +222,7 @@ def main_replay(argv: list[str] | None = None) -> int:
             ok, fail_i, err = replay_annotated_steps_until_failure(
                 page,
                 pb.steps,
-                default_timeout_ms=float(os.getenv("DARWIN_WEB2_TIMEOUT_MS", "12000")),
+                default_timeout_ms=float(os.getenv("DARWIN_WEB_TIMEOUT_MS", "12000")),
             )
         page_url = safe_page_url(page)
         browser.close()

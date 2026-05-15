@@ -58,7 +58,7 @@ from darwin_core.agents.web.intelligence.verify import VerifyOutcome, verify_aft
 def _vision_default(vision: bool | None) -> bool:
     if vision is not None:
         return vision
-    v = os.getenv("DARWIN_WEB2_VISION", os.getenv("DARWIN_WEB_VISION", "1")).strip().lower()
+    v = os.getenv("DARWIN_WEB_VISION", "1").strip().lower()
     return v not in ("0", "false", "no", "off")
 
 
@@ -348,7 +348,7 @@ def run_goal(
     owner_profile_block = ""
     owner_profile: dict[str, str] = {}
     owner_config_path = Path(os.getenv(
-        "DARWIN_WEB2_OWNER_CONFIG",
+        "DARWIN_WEB_OWNER_CONFIG",
         str(Path(__file__).resolve().parents[2] / "config" / "owner.json"),
     ))
     if owner_config_path.is_file():

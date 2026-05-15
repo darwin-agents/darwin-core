@@ -77,12 +77,12 @@ def _observation_fingerprint_impl(
 
 
 def _include_aria_in_prompt() -> bool:
-    v = os.getenv("DARWIN_WEB2_DOM_ARIA", "1").strip().lower()
+    v = os.getenv("DARWIN_WEB_DOM_ARIA", "1").strip().lower()
     return v not in ("0", "false", "no", "off")
 
 
 def _include_form_html_in_prompt() -> bool:
-    v = os.getenv("DARWIN_WEB2_DOM_FORM_HTML", "0").strip().lower()
+    v = os.getenv("DARWIN_WEB_DOM_FORM_HTML", "0").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 
