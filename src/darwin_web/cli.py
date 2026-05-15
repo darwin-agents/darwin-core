@@ -8,7 +8,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
-from darwin_web.browser_connect import request_cdp_url
+from darwin_web.browser_connect import request_browser_connect, request_browser_disconnect
+from darwin_web.browser_session import BrowserSessionUrls, set_browser_session_urls
 from darwin_web.executor import replay_playbook
 from darwin_web.llm_client import OpenRouterClient
 from darwin_web.navigator import run_goal
@@ -84,26 +85,41 @@ def main_agent(argv: list[str] | None = None) -> int:
     load_dotenv()
     args = _build_agent_parser().parse_args(argv)
     llm = OpenRouterClient()
-    cdp = request_cdp_url(args.server_url, proxy_country_code=args.proxy_country)
-
-    with sync_playwright() as pw:
-        browser = pw.chromium.connect_over_cdp(cdp)
-        context = browser.contexts[0] if browser.contexts else browser.new_context()
-        page = context.pages[0] if context.pages else context.new_page()
-
-        result = run_goal(
-            page=page,
-            goal=args.goal,
-            llm=llm,
-            max_steps=args.max_steps,
-            artifacts_dir=args.artifacts_dir,
-            playbook_out=args.playbook_out,
-            vision=False if args.no_vision else None,
+    connect = request_browser_connect(args.server_url, proxy_country_code=args.proxy_country)
+    set_browser_session_urls(
+        BrowserSessionUrls(
+            browser_id=connect.browser_id,
+            cdp_ws_url=connect.cdp_ws_url,
+            live_url=connect.live_url,
         )
-        result.playbook.write(args.playbook_out)
-        secondary = args.artifacts_dir / "playbook.yaml"
-        if secondary.resolve() != args.playbook_out.resolve():
-            result.playbook.write(secondary)
+    )
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.connect_over_cdp(connect.cdp_ws_url)
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = context.pages[0] if context.pages else context.new_page()
+
+            result = run_goal(
+                page=page,
+                goal=args.goal,
+                llm=llm,
+                max_steps=args.max_steps,
+                artifacts_dir=args.artifacts_dir,
+                playbook_out=args.playbook_out,
+                vision=False if args.no_vision else None,
+            )
+            result.playbook.write(args.playbook_out)
+            secondary = args.artifacts_dir / "playbook.yaml"
+            if secondary.resolve() != args.playbook_out.resolve():
+                result.playbook.write(secondary)
+            browser.close()
+    finally:
+        set_browser_session_urls(None)
+        try:
+            request_browser_disconnect(args.server_url, connect.browser_id)
+        except Exception:  # noqa: BLE001
+            pass
 
     out = {
         "completed": result.completed,

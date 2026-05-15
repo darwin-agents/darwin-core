@@ -60,19 +60,41 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def request_cdp_url(server_url: str, *, proxy_country_code: str | None = None) -> str:
+def request_browser_connect(
+    server_url: str, *, proxy_country_code: str | None = None
+) -> tuple[str, str, str]:
+    """Return (browser_id, cdp_ws_url, live_url) from ``POST /browser/connect``."""
     body = browser_connect_json_body(proxy_country_code=proxy_country_code)
     response = httpx.post(
         f"{server_url.rstrip('/')}/browser/connect",
         json=body,
-        timeout=20.0,
+        timeout=60.0,
     )
     response.raise_for_status()
     data = response.json()
+    browser_id = data.get("browser_id")
     cdp_ws_url = data.get("cdp_ws_url")
+    live_url = data.get("live_url")
+    if not isinstance(browser_id, str) or not browser_id:
+        raise RuntimeError("Invalid /browser/connect response; missing browser_id.")
     if not isinstance(cdp_ws_url, str) or not cdp_ws_url:
         raise RuntimeError("Invalid /browser/connect response; missing cdp_ws_url.")
-    return cdp_ws_url
+    if not isinstance(live_url, str) or not live_url:
+        raise RuntimeError("Invalid /browser/connect response; missing live_url.")
+    return browser_id, cdp_ws_url, live_url
+
+
+def request_browser_disconnect(server_url: str, browser_id: str) -> None:
+    httpx.post(
+        f"{server_url.rstrip('/')}/browser/disconnect",
+        json={"browser_id": browser_id},
+        timeout=30.0,
+    ).raise_for_status()
+
+
+def request_cdp_url(server_url: str, *, proxy_country_code: str | None = None) -> str:
+    """Backward-compatible: CDP URL only."""
+    return request_browser_connect(server_url, proxy_country_code=proxy_country_code)[1]
 
 
 def main() -> None:
@@ -89,32 +111,49 @@ def main() -> None:
         )
     owner_profile: WebOwnerProfile = load_web_owner_profile(args.owner_profile)
 
-    cdp_ws_url = request_cdp_url(args.server_url, proxy_country_code=args.proxy_country)
+    browser_id, cdp_ws_url, live_url = request_browser_connect(
+        args.server_url, proxy_country_code=args.proxy_country
+    )
     service = OpenRouterService()
     artifacts_dir = Path(args.artifacts_dir)
     recipes_dir = Path(args.recipes_dir)
     recipes_dir.mkdir(parents=True, exist_ok=True)
 
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(cdp_ws_url)
-        context = browser.contexts[0] if browser.contexts else browser.new_context()
-        page = context.pages[0] if context.pages else context.new_page()
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(cdp_ws_url)
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = context.pages[0] if context.pages else context.new_page()
 
-        result = run_web_navigation(
-            page=page,
-            goal=args.goal,
-            owner_profile=owner_profile,
-            service=service,
-            artifacts_dir=artifacts_dir,
-            recipes_dir=recipes_dir,
-            max_steps=args.max_steps,
-            debug_steps=args.debug_steps,
-        )
+            result = run_web_navigation(
+                page=page,
+                goal=args.goal,
+                owner_profile=owner_profile,
+                service=service,
+                artifacts_dir=artifacts_dir,
+                recipes_dir=recipes_dir,
+                max_steps=args.max_steps,
+                debug_steps=args.debug_steps,
+            )
 
-        report_path = artifacts_dir / "run-result.json"
-        report_path.write_text(json.dumps(result.final_result, indent=2), encoding="utf-8")
-        print(json.dumps({"final_result": result.final_result, "report_path": str(report_path)}, ensure_ascii=True))
-        browser.close()
+            report_path = artifacts_dir / "run-result.json"
+            report_path.write_text(json.dumps(result.final_result, indent=2), encoding="utf-8")
+            print(
+                json.dumps(
+                    {
+                        "final_result": result.final_result,
+                        "report_path": str(report_path),
+                        "browser_live_url": live_url,
+                    },
+                    ensure_ascii=True,
+                )
+            )
+            browser.close()
+    finally:
+        try:
+            request_browser_disconnect(args.server_url, browser_id)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 if __name__ == "__main__":

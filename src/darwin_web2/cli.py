@@ -8,7 +8,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
-from darwin_web.browser_connect import request_cdp_url
+from darwin_web.browser_connect import request_browser_connect, request_browser_disconnect
+from darwin_web.browser_session import BrowserSessionUrls, set_browser_session_urls
 from darwin_web.llm_client import OpenRouterClient
 from darwin_web.snapshot import safe_page_url
 
@@ -49,6 +50,12 @@ def _build_agent_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Override DARWIN_WEB2_ACCOUNTS_PATH for JSONL account records.",
+    )
+    p.add_argument(
+        "--emails-config",
+        type=Path,
+        default=None,
+        help="Ranked email providers JSON (easiest→hardest). Default: config/emails.json.",
     )
     p.add_argument(
         "--no-vision",
@@ -101,34 +108,62 @@ def main_agent(argv: list[str] | None = None) -> int:
     load_dotenv()
     args = _build_agent_parser().parse_args(argv)
     llm = OpenRouterClient()
-    cdp = request_cdp_url(args.server_url, proxy_country_code=args.proxy_country)
-
-    with sync_playwright() as pw:
-        browser = pw.chromium.connect_over_cdp(cdp)
-        context = browser.contexts[0] if browser.contexts else browser.new_context()
-        page = context.pages[0] if context.pages else context.new_page()
-
-        result = run_goal(
-            page=page,
-            goal=args.goal,
-            llm=llm,
-            max_steps=args.max_steps,
-            artifacts_dir=args.artifacts_dir,
-            playbook_out=args.playbook_out,
-            vision=False if args.no_vision else None,
-            accounts_path=args.accounts_path,
+    connect = request_browser_connect(args.server_url, proxy_country_code=args.proxy_country)
+    set_browser_session_urls(
+        BrowserSessionUrls(
+            browser_id=connect.browser_id,
+            cdp_ws_url=connect.cdp_ws_url,
+            live_url=connect.live_url,
         )
-        secondary = args.artifacts_dir / "playbook.yaml"
-        if (
-            args.playbook_out is not None
-            and result.playbook.steps
-            and secondary.resolve() != args.playbook_out.resolve()
-        ):
-            result.playbook.write(secondary)
-        browser.close()
+    )
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.connect_over_cdp(connect.cdp_ws_url)
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = context.pages[0] if context.pages else context.new_page()
+
+            def _focus_new_tab(new_page) -> None:  # noqa: ANN001 — Playwright callback
+                nonlocal page
+                try:
+                    new_page.bring_to_front()
+                except Exception:  # noqa: BLE001
+                    pass
+                page = new_page
+
+            context.on("page", _focus_new_tab)
+
+            result = run_goal(
+                page=page,
+                goal=args.goal,
+                llm=llm,
+                max_steps=args.max_steps,
+                artifacts_dir=args.artifacts_dir,
+                playbook_out=args.playbook_out,
+                vision=False if args.no_vision else None,
+                accounts_path=args.accounts_path,
+                emails_config_path=args.emails_config,
+            )
+            secondary = args.artifacts_dir / "playbook.yaml"
+            if (
+                args.playbook_out is not None
+                and result.playbook.steps
+                and secondary.resolve() != args.playbook_out.resolve()
+            ):
+                result.playbook.write(secondary)
+            browser.close()
+    finally:
+        set_browser_session_urls(None)
+        try:
+            request_browser_disconnect(args.server_url, connect.browser_id)
+        except Exception:  # noqa: BLE001
+            pass
 
     out = {
         "completed": result.completed,
+        "browser_id": connect.browser_id,
+        "browser_cdp_ws_url": connect.cdp_ws_url,
+        "browser_live_url": connect.live_url,
         "playbook_path": str(args.playbook_out) if args.playbook_out else "",
         "planner_turns": result.planner_turns,
         "errors": result.errors,

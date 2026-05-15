@@ -9,7 +9,7 @@ def coerce_planner_raw(raw: dict[str, Any]) -> dict[str, Any]:
     """Fix ``action`` as list, nested op dicts, or steps under other keys."""
     _KNOWN_OPS = frozenset({
         "goto", "go_back", "click", "fill", "select_option", "pick_option",
-        "press", "wait_ms", "scroll_into_view", "request_human", "done",
+        "combobox_pick", "press", "wait_ms", "scroll_into_view", "request_human", "done",
     })
     action = raw.get("action")
     if isinstance(action, dict) and action.get("op") is None:
@@ -53,5 +53,14 @@ def coerce_planner_raw(raw: dict[str, Any]) -> dict[str, Any]:
                     break
                 if isinstance(first, dict) and isinstance(first.get("action"), dict):
                     raw["action"] = first["action"]
+                    break
+    action = raw.get("action")
+    if isinstance(action, dict) and action.get("op") == "fill_input":
+        action["op"] = "fill"
+        if "value" not in action:
+            for alt in ("text", "input", "content"):
+                v = action.get(alt)
+                if isinstance(v, str):
+                    action["value"] = v
                     break
     return raw

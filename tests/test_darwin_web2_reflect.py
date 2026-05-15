@@ -4,11 +4,21 @@ from darwin_web2.reflect import reflect_repair_action
 
 
 class _StubLLM:
-    def __init__(self, payload: dict) -> None:
-        self.payload = payload
+    def __init__(self, payload: dict | None = None, *, raise_json: bool = False) -> None:
+        self.payload = payload or {}
+        self.raise_json = raise_json
 
     def chat_json(self, user_prompt: str, *, system_prompt: str) -> dict:
+        if self.raise_json:
+            raise ValueError("No JSON object found in model output.")
         return dict(self.payload)
+
+    def chat_planner_turn(self, user_prompt: str, *, system_prompt: str, vision_png_path=None) -> object:
+        if self.raise_json:
+            raise ValueError("No JSON object found in model output.")
+        from types import SimpleNamespace
+
+        return SimpleNamespace(assistant_parsed=dict(self.payload))
 
 
 def test_reflect_returns_none_without_messages() -> None:
@@ -41,3 +51,17 @@ def test_reflect_returns_coerced_action() -> None:
     )
     assert raw is not None
     assert raw["action"]["op"] == "wait_ms"
+
+
+def test_reflect_returns_none_when_llm_output_not_json() -> None:
+    llm = _StubLLM(raise_json=True)
+    assert (
+        reflect_repair_action(
+            llm=llm,
+            goal="g",
+            observation_text="obs",
+            last_action={"op": "fill", "ref": 1, "value": "x", "describe": "d"},
+            verify_messages=("stagnation: stuck",),
+        )
+        is None
+    )

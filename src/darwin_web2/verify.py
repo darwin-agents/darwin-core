@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-
 from darwin_web2.observation import Observation
 
 
@@ -44,12 +43,31 @@ def _digest_mirrors_doc_title(*, digest: str, title: str) -> bool:
     return False
 
 
+def _repeated_action_pattern(
+    recent_actions: deque[tuple[str, int | None, str | None]] | None,
+    *,
+    min_count: int = 3,
+) -> tuple[str, int] | None:
+    """Return (op, ref) when the last *min_count* steps used the same op+ref."""
+    if recent_actions is None or len(recent_actions) < min_count:
+        return None
+    tail = list(recent_actions)[-min_count:]
+    op0, ref0, _d0 = tail[0]
+    if ref0 is None or not op0:
+        return None
+    for op, ref, _d in tail[1:]:
+        if op != op0 or ref != ref0:
+            return None
+    return op0, ref0
+
+
 def verify_after_step(
     *,
     obs_before: Observation,
     obs_after: Observation,
     executor_error: str | None,
     fingerprint_history: deque[str],
+    recent_actions: deque[tuple[str, int | None, str | None]] | None = None,
 ) -> VerifyOutcome:
     """Cheap checks after each planner action. Updates *fingerprint_history* in place (maxlen 4)."""
     msgs: list[str] = []
@@ -58,7 +76,7 @@ def verify_after_step(
 
     if obs_before.url != obs_after.url:
         fingerprint_history.clear()
-    fingerprint_history.append(obs_after.fingerprint)
+    fingerprint_history.append(obs_after.layout_fingerprint)
 
     stagnation = False
     if len(fingerprint_history) >= 3:
@@ -66,9 +84,19 @@ def verify_after_step(
         if last3[0] == last3[1] == last3[2]:
             stagnation = True
             msgs.append(
-                "stagnation: URL + interactive fingerprint unchanged for 3 consecutive steps — "
-                "change strategy (different control, fix validation, wait_ms, or request_human)."
+                "stagnation: URL + page layout unchanged for 3 consecutive steps — "
+                "change strategy (submit/primary button, different control, fix validation, "
+                "wait_ms, or request_human)."
             )
+
+    repeat = _repeated_action_pattern(recent_actions)
+    if repeat is not None:
+        op_name, ref_n = repeat
+        stagnation = True
+        msgs.append(
+            f"stagnation: repeated {op_name} on ref {ref_n} three times without progress — "
+            "use a different op or ref (e.g. click submit when fields look complete)."
+        )
 
     digest_raw = (obs_after.alert_digest or "").strip()
     if _digest_signals_problem(digest_raw) and not executor_error:
