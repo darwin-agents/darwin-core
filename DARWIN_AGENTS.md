@@ -10,6 +10,10 @@ It decides the survival strategy of the DARWIN. It's only called by the Darwin M
 - Output: Strategy.md
 - Default model: smart-LLM
 
+# DARWIN PM
+
+It receives the TASK
+
 # DARWIN SCOUT (WEB SCRAPER)
 
 It navigates URLs and return the YAML files with the actions so the DARWIN HUNTER can easily click, input values, upload files, etc.
@@ -25,3 +29,5 @@ It doesn't call the LLM on wakeup, it e
 It's the agent that talks to the human owner of the Darwin. When the Darwin
 
 # DARWIN ACCOUNTANT
+
+ACCOUNTs, TASKs, EVENTs,
