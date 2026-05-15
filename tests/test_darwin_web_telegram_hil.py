@@ -10,6 +10,60 @@ import pytest
 from darwin_web import telegram_hil as th
 
 
+def test_notify_includes_browser_live_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DARWIN_WEB_TELEGRAM_BOT_TOKEN", "TESTTOKEN")
+    monkeypatch.setenv("DARWIN_WEB_TELEGRAM_CHAT_ID", "99")
+    monkeypatch.setenv("DARWIN_WEB_TELEGRAM_HIL", "1")
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "sendMessage" in str(request.url):
+            body = json.loads(request.content.decode())
+            sent.append(body.get("text", ""))
+        if "getUpdates" in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 1,
+                            "message": {"chat": {"id": 99}, "text": "/continue"},
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=5.0)
+    cdp = "wss://connect.browser-use.com?apiKey=test&proxyCountryCode=es"
+    live = "https://live.browser-use.com?wss=wss%3A%2F%2Fconnect.browser-use.com%3FapiKey%3Dtest"
+    result = th.notify_owner_request_human(
+        reason="CAPTCHA",
+        instructions="Hold the button.",
+        page_url="https://signup.live.com/",
+        image_path=None,
+        wait_for_owner=True,
+        max_wait_s=5.0,
+        browser_cdp_ws_url=cdp,
+        browser_live_url=live,
+        client=client,
+    )
+    assert result.ok
+    assert result.browser_cdp_ws_url == cdp
+    assert result.browser_live_url == live
+    assert any("live.browser-use.com" in t for t in sent)
+    assert any("Open live browser" in t for t in sent)
+    assert not any("CDP WebSocket" in t for t in sent)
+
+
+def test_classify_browser_ui_captcha() -> None:
+    assert th.classify_human_input_kind(
+        reason="CAPTCHA requires manual interaction",
+        instructions="Press and hold the button in the browser",
+    ) == "browser_ui"
+
+
 def test_telegram_hil_env_enabled_respects_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DARWIN_WEB_TELEGRAM_HIL", "0")
     monkeypatch.setenv("DARWIN_WEB_TELEGRAM_BOT_TOKEN", "x")
@@ -47,7 +101,7 @@ def test_notify_owner_accepts_plain_language_reply(monkeypatch: pytest.MonkeyPat
     img = tmp_path / "s.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n")
 
-    err = th.notify_owner_request_human(
+    result = th.notify_owner_request_human(
         reason="Language",
         instructions="Confirm language preference.",
         page_url="https://example.com/x",
@@ -56,7 +110,8 @@ def test_notify_owner_accepts_plain_language_reply(monkeypatch: pytest.MonkeyPat
         max_wait_s=30.0,
         client=client,
     )
-    assert err is None
+    assert result.ok
+    assert "plain language" in result.owner_reply_hint
     assert th.consume_last_owner_telegram_reply() == "I don't care about language"
 
 
@@ -96,7 +151,7 @@ def test_notify_owner_sends_messages_and_waits(monkeypatch: pytest.MonkeyPatch, 
     img = tmp_path / "s.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n")
 
-    err = th.notify_owner_request_human(
+    result = th.notify_owner_request_human(
         reason="QR wall",
         instructions="Scan the code on your phone.",
         page_url="https://example.com/x",
@@ -105,7 +160,8 @@ def test_notify_owner_sends_messages_and_waits(monkeypatch: pytest.MonkeyPatch, 
         max_wait_s=30.0,
         client=client,
     )
-    assert err is None
+    assert result.ok
+    assert result.owner_reply == "/continue"
     assert any("sendMessage" in u for _, u in calls)
     assert any("sendPhoto" in u for _, u in calls)
     assert any("getUpdates" in u for _, u in calls)

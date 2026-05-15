@@ -6,6 +6,7 @@ import html
 import json
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,158 @@ def _telegram_strict_continue_only() -> bool:
     """When true, only ``/continue``-style commands end the wait; default is any text (natural language)."""
     v = os.getenv("DARWIN_WEB_TELEGRAM_STRICT_CONTINUE", "0").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+def classify_human_input_kind(*, reason: str, instructions: str) -> str:
+    """Rough class for Telegram copy: ``qr``, ``secret``, ``browser_ui``, or ``generic``."""
+    blob = f"{reason} {instructions}".lower()
+    if any(k in blob for k in ("qr", "scan the code", "scan on your phone")):
+        return "qr"
+    if any(k in blob for k in ("otp", "one-time", "verification code", "sms code", "inbox", "6-digit")):
+        return "secret"
+    if any(
+        k in blob
+        for k in (
+            "captcha",
+            "press and hold",
+            "press-and-hold",
+            "hold down",
+            "mantener pulsado",
+            "pulsar y mantener",
+            "prove you are human",
+            "prove you're human",
+            "human verification",
+            "not a robot",
+        )
+    ):
+        return "browser_ui"
+    return "generic"
+
+
+def owner_browser_action_notice_plain() -> str:
+    """When the owner must interact with the live tab (CAPTCHA, press-and-hold), not Telegram."""
+    return (
+        "Action required in the live browser window the agent controls — not in Telegram. "
+        "Open the live view link in the message (not the raw WebSocket URL in a CDP connect box). "
+        "The screenshot is only a reference. Complete the step there (e.g. press-and-hold), then reply."
+    )
+
+
+def owner_browser_action_notice_html() -> str:
+    return (
+        "<b>Action required in the browser</b> (not in Telegram). "
+        "Open the <b>live view link</b> below in a normal browser tab — do <b>not</b> paste the "
+        "raw WebSocket URL into “Connect to CDP endpoint” (that often shows <code>about:blank</code>). "
+        "The screenshot is only a reference; complete the step in the live view, then reply below."
+    )
+
+
+def owner_telegram_reply_hint_plain(*, hil_kind: str = "generic") -> str:
+    """Plain-text hint sent to the owner after a human-input request (also logged in artifacts)."""
+    if _telegram_strict_continue_only():
+        return (
+            "Reply with /continue (or done) when the browser tab is ready for the agent to continue."
+        )
+    if hil_kind == "browser_ui":
+        return (
+            "When finished in the browser tab, send /continue, or reply in plain language "
+            "(e.g. 'done', 'passed captcha', 'use accessible challenge')."
+        )
+    if hil_kind == "secret":
+        return (
+            "Type the OTP or secret into the browser tab yourself, or paste it here in plain language "
+            "so the next planner turn can fill it. Send /continue when the tab is ready."
+        )
+    if hil_kind == "qr":
+        return (
+            "Scan the QR from the screenshot or the decoded link message on your phone. "
+            "Send /continue when the browser tab has moved on."
+        )
+    return (
+        "Reply in plain language to tell the agent what to do (language choice, OTP, corrections, "
+        "etc.). The next planner turn will see your message. You can also send /continue when the "
+        "tab is already in the right state and no extra instructions are needed."
+    )
+
+
+def owner_telegram_reply_hint_html(*, hil_kind: str = "generic") -> str:
+    """Telegram HTML variant of :func:`owner_telegram_reply_hint_plain`."""
+    if _telegram_strict_continue_only():
+        return (
+            "Reply with <code>/continue</code> (or <code>done</code>) when the browser tab is ready "
+            "for the agent to continue."
+        )
+    if hil_kind == "browser_ui":
+        return (
+            "When finished in the <b>browser tab</b>, send <code>/continue</code> or reply in plain "
+            "language (e.g. passed captcha)."
+        )
+    if hil_kind == "secret":
+        return (
+            "Enter the code in the <b>browser tab</b>, or paste it here in plain language for the next "
+            "planner turn. Then <code>/continue</code> when ready."
+        )
+    if hil_kind == "qr":
+        return (
+            "Scan the QR from the screenshot or the decoded link on your phone. "
+            "Send <code>/continue</code> when the browser tab has moved on."
+        )
+    return (
+        "Reply in <b>plain language</b> to tell the agent what to do (language choice, OTP, corrections, "
+        "etc.). The next planner turn will see your message. You can also send <code>/continue</code> "
+        "when the tab is already in the right state and no extra instructions are needed."
+    )
+
+
+@dataclass
+class RequestHumanResult:
+    """Outcome of ``notify_owner_request_human`` (for logs and darwin_web2 artifacts)."""
+
+    error: str | None = None
+    owner_reply_hint: str = ""
+    owner_reply: str | None = None
+    waited_for_owner: bool = False
+    telegram_configured: bool = True
+    hil_kind: str = "generic"
+    browser_action_notice: str | None = None
+    browser_cdp_ws_url: str | None = None
+    browser_live_url: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+    def to_artifact_dict(
+        self,
+        *,
+        thought: str | None,
+        reason: str,
+        instructions: str,
+        why_not_automated: str,
+        page_url: str,
+    ) -> dict[str, Any]:
+        return {
+            "agent": {
+                "thought": thought,
+                "reason": reason,
+                "instructions": instructions,
+                "why_not_automated": why_not_automated,
+            },
+            "owner_channel": {
+                "telegram": {
+                    "configured": self.telegram_configured,
+                    "hil_kind": self.hil_kind,
+                    "browser_action_notice": self.browser_action_notice,
+                    "browser_cdp_ws_url": self.browser_cdp_ws_url,
+                    "browser_live_url": self.browser_live_url,
+                    "hint_message": self.owner_reply_hint or None,
+                    "owner_reply": self.owner_reply,
+                    "waited_for_owner": self.waited_for_owner,
+                    "error": self.error,
+                    "page_url": page_url or None,
+                }
+            },
+        }
 
 
 def _owner_message_ends_wait(text: str) -> bool:
@@ -206,17 +359,35 @@ def notify_owner_request_human(
     image_path: Path | None,
     wait_for_owner: bool,
     max_wait_s: float,
+    browser_cdp_ws_url: str | None = None,
+    browser_live_url: str | None = None,
     client: httpx.Client | None = None,
-) -> str | None:
-    """Send owner Telegram updates (text + optional screenshot). Optionally block until they reply.
+) -> RequestHumanResult:
+    """Send owner Telegram updates (text + optional screenshot). Optionally block until they reply."""
+    hil_kind = classify_human_input_kind(reason=reason, instructions=instructions)
+    browser_notice: str | None = None
+    if hil_kind == "browser_ui":
+        browser_notice = owner_browser_action_notice_plain()
+    hint_plain = owner_telegram_reply_hint_plain(hil_kind=hil_kind)
+    cdp = (browser_cdp_ws_url or "").strip() or None
+    live = (browser_live_url or "").strip() or None
+    if live is None and cdp:
+        from darwin_web.browser_connect import live_url_from_cdp_ws
 
-    Returns ``None`` on success, or a short error string for the agent log.
-    """
+        live = live_url_from_cdp_ws(cdp)
     token = os.getenv("DARWIN_WEB_TELEGRAM_BOT_TOKEN", "").strip()
     chat_raw = os.getenv("DARWIN_WEB_TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_raw:
-        return "telegram: DARWIN_WEB_TELEGRAM_BOT_TOKEN and DARWIN_WEB_TELEGRAM_CHAT_ID must be set"
-
+        return RequestHumanResult(
+            error="telegram: DARWIN_WEB_TELEGRAM_BOT_TOKEN and DARWIN_WEB_TELEGRAM_CHAT_ID must be set",
+            owner_reply_hint=hint_plain,
+            waited_for_owner=wait_for_owner,
+            telegram_configured=False,
+            hil_kind=hil_kind,
+            browser_action_notice=browser_notice,
+            browser_cdp_ws_url=cdp,
+            browser_live_url=live,
+        )
     er = html.escape(reason.strip(), quote=False)
     eu = html.escape(page_url.strip(), quote=False)
     ei = html.escape(instructions.strip(), quote=False)
@@ -226,8 +397,21 @@ def notify_owner_request_human(
         f"<b>Reason:</b> {er}\n\n"
         f"<b>Instructions (from planner):</b>\n{ei}"
     )
+    if browser_notice is not None:
+        header += f"\n\n{owner_browser_action_notice_html()}"
     if page_url.strip():
         header += f"\n\n<b>Page URL</b> (reference only):\n<code>{eu}</code>"
+    if live:
+        href_esc = html.escape(live, quote=True)
+        header += (
+            "\n\n<b>Live browser</b> — open this link to control the <b>same</b> session "
+            f'the agent uses:\n<a href="{href_esc}">Open live browser</a>'
+        )
+        if hil_kind == "browser_ui":
+            header += (
+                "\n<i>Do not paste the WebSocket URL into “Connect to CDP endpoint”; "
+                "that UI often attaches to a blank tab.</i>"
+            )
 
     own_client = client is None
     hc = httpx.Client(timeout=httpx.Timeout(90.0, connect=15.0))
@@ -241,21 +425,59 @@ def notify_owner_request_human(
                 json={"chat_id": chat_raw, "text": part, "parse_mode": "HTML"},
             )
             if not _tg_ok(r0):
-                return f"telegram sendMessage HTTP {r0.status_code}"
+                return RequestHumanResult(
+                    error=f"telegram sendMessage HTTP {r0.status_code}",
+                    owner_reply_hint=hint_plain,
+                    waited_for_owner=wait_for_owner,
+                    hil_kind=hil_kind,
+                    browser_action_notice=browser_notice,
+                    browser_cdp_ws_url=cdp,
+                    browser_live_url=live,
+                )
+
+        if live:
+            for part in _chunk_text(live, 4096):
+                rp = c.post(
+                    f"{base}/sendMessage",
+                    json={"chat_id": chat_raw, "text": part},
+                )
+                if not _tg_ok(rp):
+                    return RequestHumanResult(
+                        error=f"telegram sendMessage (live URL) HTTP {rp.status_code}",
+                        owner_reply_hint=hint_plain,
+                        waited_for_owner=wait_for_owner,
+                        hil_kind=hil_kind,
+                        browser_action_notice=browser_notice,
+                        browser_cdp_ws_url=cdp,
+                        browser_live_url=live,
+                    )
 
         if image_path is not None and image_path.is_file():
+            photo_caption = (
+                "Reference screenshot of the agent's browser tab (interact in that window, not here)."
+                if hil_kind == "browser_ui"
+                else "Screenshot of the page the agent is on."
+            )
             with image_path.open("rb") as f:
                 r1 = c.post(
                     f"{base}/sendPhoto",
                     data={
                         "chat_id": chat_raw,
-                        "caption": "Screenshot of the page the agent is on.",
+                        "caption": photo_caption,
                         "parse_mode": "HTML",
                     },
                     files={"photo": (image_path.name, f, "image/png")},
                 )
             if not _tg_ok(r1):
-                return f"telegram sendPhoto HTTP {r1.status_code}"
+                return RequestHumanResult(
+                    error=f"telegram sendPhoto HTTP {r1.status_code}",
+                    owner_reply_hint=hint_plain,
+                    waited_for_owner=wait_for_owner,
+                    hil_kind=hil_kind,
+                    browser_action_notice=browser_notice,
+                    browser_cdp_ws_url=cdp,
+                    browser_live_url=live,
+                )
 
             decoded = try_decode_http_qr_from_png(image_path)
             if decoded:
@@ -263,26 +485,36 @@ def notify_owner_request_human(
                     c, base=base, chat_id=chat_raw, decoded_url=decoded
                 )
                 if qr_err:
-                    return qr_err
+                    return RequestHumanResult(
+                        error=qr_err,
+                        owner_reply_hint=hint_plain,
+                        waited_for_owner=wait_for_owner,
+                        hil_kind=hil_kind,
+                        browser_action_notice=browser_notice,
+                        browser_cdp_ws_url=cdp,
+                        browser_live_url=live,
+                    )
 
+        owner_reply: str | None = None
         if wait_for_owner:
-            if _telegram_strict_continue_only():
-                hint = (
-                    "Reply with <code>/continue</code> (or <code>done</code>) when the browser tab is ready for the agent "
-                    "to continue."
-                )
-            else:
-                hint = (
-                    "Reply in <b>plain language</b> to tell the agent what to do (language choice, OTP, corrections, "
-                    "etc.). The next planner turn will see your message. You can also send <code>/continue</code> when "
-                    "the tab is already in the right state and no extra instructions are needed."
-                )
             r3 = c.post(
                 f"{base}/sendMessage",
-                json={"chat_id": chat_raw, "text": hint, "parse_mode": "HTML"},
+                json={
+                    "chat_id": chat_raw,
+                    "text": owner_telegram_reply_hint_html(hil_kind=hil_kind),
+                    "parse_mode": "HTML",
+                },
             )
             if not _tg_ok(r3):
-                return f"telegram sendMessage HTTP {r3.status_code}"
+                return RequestHumanResult(
+                    error=f"telegram sendMessage HTTP {r3.status_code}",
+                    owner_reply_hint=hint_plain,
+                    waited_for_owner=True,
+                    hil_kind=hil_kind,
+                    browser_action_notice=browser_notice,
+                    browser_cdp_ws_url=cdp,
+                    browser_live_url=live,
+                )
             reply = _wait_for_owner_message(
                 c,
                 token=token,
@@ -290,10 +522,27 @@ def notify_owner_request_human(
                 max_wait_s=max_wait_s,
             )
             if reply:
-                _set_last_owner_reply(reply[:4000])
-        return None
+                owner_reply = reply[:4000]
+                _set_last_owner_reply(owner_reply)
+        return RequestHumanResult(
+            owner_reply_hint=hint_plain,
+            owner_reply=owner_reply,
+            waited_for_owner=wait_for_owner,
+            hil_kind=hil_kind,
+            browser_action_notice=browser_notice,
+            browser_cdp_ws_url=cdp,
+            browser_live_url=live,
+        )
     except httpx.HTTPError as exc:
-        return f"telegram HTTP: {exc}"
+        return RequestHumanResult(
+            error=f"telegram HTTP: {exc}",
+            owner_reply_hint=hint_plain,
+            waited_for_owner=wait_for_owner,
+            hil_kind=hil_kind,
+            browser_action_notice=browser_notice,
+            browser_cdp_ws_url=cdp,
+            browser_live_url=live,
+        )
     finally:
         if own_client:
             hc.close()
