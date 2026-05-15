@@ -1,0 +1,79 @@
+[
+  {
+    "provider": "Mailfence",
+    "country": "Belgium",
+    "url": "https://mailfence.com",
+    "bot_difficulty": "Low",
+    "notes": "Privacy-focused provider that often allows registration without phone verification. High success rate for script-based account creation when using clean residential IPs.[cite: 1]"
+  },
+  {
+    "provider": "Inbox.lv",
+    "country": "Latvia",
+    "url": "https://www.inbox.lv",
+    "bot_difficulty": "Low-Medium",
+    "notes": "A regional European provider that is often overlooked. Registration is straightforward, though they have begun implementing stricter anti-bot checks for non-European IP addresses.[cite: 1]"
+  },
+  {
+    "provider": "Mail.com / GMX",
+    "country": "Germany",
+    "url": "https://www.mail.com",
+    "bot_difficulty": "Low-Medium",
+    "notes": "Minimal registration requirements but relies heavily on IP reputation. Often only requires a basic Captcha; however, accounts are prone to rapid shadowbanning if automated patterns are detected.[cite: 1]"
+  },
+  {
+    "provider": "GMX / Mail.com",
+    "country": "Germany",
+    "url": "https://www.gmx.com",
+    "bot_difficulty": "Medium",
+    "notes": "Easier initial signup but very high 'shadow-ban' rate where accounts are created but cannot send mail.[cite: 1]"
+  },
+  {
+    "provider": "Mail.ru",
+    "country": "Russia",
+    "url": "https://mail.ru",
+    "bot_difficulty": "Medium",
+    "notes": "Technically easier but highly regional; accounts created outside CIS regions are flagged quickly.[cite: 1]"
+  },
+  {
+    "provider": "Proton Mail",
+    "country": "Switzerland",
+    "url": "https://proton.me",
+    "bot_difficulty": "Medium-High",
+    "notes": "Registration difficulty is dynamic. It may skip SMS verification if the user's IP and browser fingerprint appear 'organic', but anti-abuse systems are aggressive post-signup.[cite: 1]"
+  },
+  {
+    "provider": "Tuta (formerly Tutanota)",
+    "country": "Germany",
+    "url": "https://tuta.com",
+    "bot_difficulty": "High",
+    "notes": "Manual approval queue for new accounts (often 48 hours) to prevent bot mass-registration.[cite: 1]"
+  },
+  {
+    "provider": "Zoho Mail",
+    "country": "India",
+    "url": "https://www.zoho.com/mail",
+    "bot_difficulty": "High",
+    "notes": "Mandatory mobile number verification for free accounts. Very low tolerance for automated patterns.[cite: 1]"
+  },
+  {
+    "provider": "Yahoo Mail",
+    "country": "United States",
+    "url": "https://login.yahoo.com",
+    "bot_difficulty": "Very High",
+    "notes": "Strictly enforces phone verification in most regions. Aggressive blacklisting of automated IP patterns.[cite: 1]"
+  },
+  {
+    "provider": "Outlook",
+    "country": "United States",
+    "url": "https://outlook.live.com",
+    "bot_difficulty": "Very High",
+    "notes": "Frequent 'suspicious activity' locks. Sophisticated FunCaptcha challenges are common during automated registration.[cite: 1]"
+  },
+  {
+    "provider": "Gmail",
+    "country": "United States",
+    "url": "https://mail.google.com",
+    "bot_difficulty": "Very High",
+    "notes": "Requires high-quality residential proxies and often forces phone verification (PVA). High detection of headless browsers.[cite: 1]"
+  }
+]
