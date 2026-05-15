@@ -17,6 +17,43 @@ _PW_ALPHABET = string.ascii_letters + string.digits + "!@%^_+-="
 
 _pw_cache: str | None = None
 
+# RFC 2606 / documentation TLDs — rejected for real signup fills.
+_RESERVED_MAIL_HOSTS = frozenset(
+    {
+        "example.com",
+        "example.org",
+        "example.net",
+        "test.com",
+        "test",
+        "localhost",
+        "invalid",
+    }
+)
+
+
+def _is_reserved_mail_host(host: str) -> bool:
+    h = host.strip().lower().strip(".")
+    if not h:
+        return False
+    if h in _RESERVED_MAIL_HOSTS:
+        return True
+    return h.endswith(".example") or h.endswith(".test") or h.endswith(".localhost")
+
+
+def reserved_email_domain_error(value: str) -> str | None:
+    """Return planner-visible error when *value* uses a documentation/reserved mail host."""
+    if "@" not in value:
+        return None
+    host = value.rsplit("@", 1)[-1].strip()
+    if not _is_reserved_mail_host(host):
+        return None
+    return (
+        "fill: do not use documentation or reserved mail domains (example.com, test.com, localhost, …). "
+        "Use a domain this signup provider actually offers (domain combobox on the page, page hostname, or "
+        "``$GENHASH@<provider-domain>`` — never example.com)."
+    )
+
+
 _PERSONAL_NAME_MARKERS = frozenset(
     {
         "firstname",
@@ -97,11 +134,20 @@ def try_expand_fill(value: str, *, dom: dict[str, Any] | None = None) -> tuple[s
         reset_pw_cache()
         if mail_host is None:
             return genhash(18), None
+        if _is_reserved_mail_host(mail_host):
+            return (
+                value,
+                reserved_email_domain_error(f"x@{mail_host}") or "fill: reserved mail domain.",
+            )
         return f"{genhash(18)}@{mail_host}", None
 
     username_out = _expand_username_sentinel()
     if username_out is not None:
         return username_out
+
+    domain_err = reserved_email_domain_error(key)
+    if domain_err:
+        return value, domain_err
 
     return value, None
 

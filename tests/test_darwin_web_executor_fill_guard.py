@@ -29,7 +29,7 @@ def test_redundant_fill_skip_when_equal() -> None:
 
 def test_fill_missing_ref_returns_error() -> None:
     page = MagicMock()
-    cont, step, err = run_planner_action(
+    cont, step, err, _meta = run_planner_action(
         page,
         {"op": "fill", "value": "01", "describe": "enter day"},
     )
@@ -41,7 +41,7 @@ def test_fill_missing_ref_returns_error() -> None:
 
 def test_click_missing_ref_returns_error() -> None:
     page = MagicMock()
-    cont, step, err = run_planner_action(page, {"op": "click", "describe": "go"})
+    cont, step, err, _meta = run_planner_action(page, {"op": "click", "describe": "go"})
     assert cont is True
     assert step is None
     assert err
@@ -64,7 +64,7 @@ def test_fill_combobox_ref_returns_guidance() -> None:
         False,  # not fillable (custom combobox)
     ]
 
-    cont, step, err = run_planner_action(
+    cont, step, err, _meta = run_planner_action(
         page,
         {"op": "fill", "ref": 2, "value": "01", "describe": "day"},
     )

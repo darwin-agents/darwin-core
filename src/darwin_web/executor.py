@@ -7,8 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from playwright.sync_api import ElementHandle, Locator, Page
+from playwright._impl._errors import TargetClosedError
 from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError
 
+from darwin_web.snapshot import PageClosed
+
+from darwin_web.browser_session import get_browser_cdp_ws_url, get_browser_live_url
 from darwin_web.genhash import reset_pw_cache, try_expand_fill
 from darwin_web.playbook import Playbook, PlaybookStep
 from darwin_web.selectors import css_path_for_element
@@ -16,6 +20,7 @@ from darwin_web.telegram_hil import (
     coerce_bool,
     coerce_max_wait_s,
     notify_owner_request_human,
+    owner_telegram_reply_hint_plain,
     telegram_hil_env_enabled,
 )
 
@@ -228,6 +233,193 @@ def _visible_combobox_inner_text_blobs(page: Page) -> list[str]:
     return out
 
 
+_MONTH_EN_TO_ES: dict[str, str] = {
+    "january": "enero",
+    "february": "febrero",
+    "march": "marzo",
+    "april": "abril",
+    "may": "mayo",
+    "june": "junio",
+    "july": "julio",
+    "august": "agosto",
+    "september": "septiembre",
+    "october": "octubre",
+    "november": "noviembre",
+    "december": "diciembre",
+}
+
+
+def _label_pick_variants(label: str) -> list[str]:
+    """Try English month names and Spanish UI spellings (and vice versa)."""
+    lab = label.strip()
+    if not lab:
+        return []
+    out: list[str] = [lab]
+    low = lab.lower()
+    if low in _MONTH_EN_TO_ES:
+        alt = _MONTH_EN_TO_ES[low]
+        if alt not in out:
+            out.append(alt.capitalize() if lab[:1].isupper() else alt)
+    for en, es in _MONTH_EN_TO_ES.items():
+        if low == es and en.capitalize() not in out:
+            out.append(en.capitalize())
+        if low == es and en not in out:
+            out.append(en)
+    return out
+
+
+def _click_visible_text_option(page: Page, label: str, *, timeout_ms: int) -> str | None:
+    """Click a small visible node whose text equals *label* (Fluent / portal menus)."""
+    lab = label.strip()
+    if not lab:
+        return "empty label"
+    pat = re.compile(r"^\s*" + re.escape(lab) + r"\s*$", re.IGNORECASE | re.UNICODE)
+    last_err: str | None = None
+    container_selectors = (
+        '[role="listbox"]',
+        '[role="menu"]',
+        '[id*="listbox" i]',
+        '[id*="Listbox"]',
+        '[class*="ms-Callout"]',
+        '[class*="fui-Listbox"]',
+        '[data-is-focusable="true"]',
+    )
+    for container_sel in container_selectors:
+        try:
+            containers = page.locator(container_sel)
+            n_c = min(int(containers.count()), 12)
+        except Exception:  # noqa: BLE001
+            continue
+        for ci in range(n_c):
+            cont = containers.nth(ci)
+            try:
+                if not cont.is_visible(timeout=400):
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                rows = cont.locator("*").filter(has_text=pat)
+                n = int(rows.count())
+            except Exception:  # noqa: BLE001
+                continue
+            for i in range(n - 1, -1, -1):
+                row = rows.nth(i)
+                try:
+                    if not row.is_visible(timeout=400):
+                        continue
+                    box = row.bounding_box()
+                    if box is not None and box.get("height", 0) > 120:
+                        continue
+                    row.click(timeout=timeout_ms)
+                    return None
+                except Exception as exc:  # noqa: BLE001
+                    last_err = str(exc)
+    try:
+        rows = page.get_by_text(pat)
+        n = min(int(rows.count()), 40)
+    except Exception as exc:  # noqa: BLE001
+        return str(exc)
+    for i in range(n - 1, -1, -1):
+        row = rows.nth(i)
+        try:
+            if not row.is_visible(timeout=400):
+                continue
+            box = row.bounding_box()
+            if box is not None and box.get("height", 0) > 120:
+                continue
+            row.click(timeout=timeout_ms)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            last_err = str(exc)
+    if last_err:
+        return f"visible text click failed: {last_err}"
+    return f"no visible text row matching {lab!r}"
+
+
+def _wait_for_dropdown_surface(page: Page, *, timeout_ms: int) -> None:
+    for menu_sel in ('[role="listbox"]', '[role="menu"]', '[id*="listbox" i]'):
+        try:
+            page.locator(menu_sel).first.wait_for(state="visible", timeout=min(2500, timeout_ms))
+            return
+        except Exception:  # noqa: BLE001
+            continue
+
+
+def _combobox_pick_at_ref(
+    page: Page,
+    ref: int,
+    label: str,
+    *,
+    default_timeout_ms: float,
+) -> tuple[str | None, str | None]:
+    """Open combobox *ref* and choose *label*. Returns (selector, error)."""
+    timeout_ms = int(default_timeout_ms)
+    loc = _ref_locator(page, ref).first
+    loc.scroll_into_view_if_needed(timeout=timeout_ms)
+    handle = loc.element_handle()
+    if handle is None:
+        return None, f"combobox_pick: no element for ref {ref}"
+    sel = css_path_for_element(handle)
+    handle.dispose()
+
+    if _pick_option_redundant_vs_combobox_blobs(
+        label, [str(loc.inner_text(timeout=800) or ""), str(loc.get_attribute("aria-valuetext") or "")]
+    ):
+        return sel, None
+
+    expanded: str | None = None
+    try:
+        expanded = loc.get_attribute("aria-expanded")
+    except Exception:  # noqa: BLE001
+        expanded = None
+
+    def try_pick_all_variants() -> str | None:
+        last: str | None = None
+        for variant in _label_pick_variants(label):
+            err = _pick_role_option(page, variant, timeout_ms=timeout_ms)
+            if err is None:
+                return None
+            last = err
+            err2 = _click_visible_text_option(page, variant, timeout_ms=timeout_ms)
+            if err2 is None:
+                return None
+            last = err2
+        if label.strip().isdigit():
+            try:
+                page.keyboard.type(label.strip())
+                page.wait_for_timeout(200)
+                page.keyboard.press("Enter")
+                return None
+            except Exception as exc:  # noqa: BLE001
+                last = str(exc)
+        return last
+
+    if expanded == "true":
+        err_open = try_pick_all_variants()
+        _post_click_settle(page)
+        if err_open is None:
+            return sel, None
+        return sel, err_open
+
+    err_before_open = try_pick_all_variants()
+    if err_before_open is None:
+        _post_click_settle(page)
+        return sel, None
+
+    try:
+        loc.click(timeout=default_timeout_ms)
+    except Exception as exc:  # noqa: BLE001
+        return sel, f"combobox_pick: could not click ref {ref}: {exc}"
+    page.wait_for_timeout(400)
+    _wait_for_dropdown_surface(page, timeout_ms=timeout_ms)
+
+    err_after_open = try_pick_all_variants()
+    _post_click_settle(page)
+    if err_after_open is None:
+        return sel, None
+    return sel, err_after_open or f"combobox_pick: could not select {label.strip()!r}"
+
+
 def _pick_role_option(page: Page, label: str, *, timeout_ms: int) -> str | None:
     """Click a visible ``role=option`` or ``role=menuitem`` row by accessible or visible text.
 
@@ -300,6 +492,32 @@ def _pick_role_option(page: Page, label: str, *, timeout_ms: int) -> str | None:
     if _pick_option_redundant_vs_combobox_blobs(lab, _visible_combobox_inner_text_blobs(page)):
         return None
 
+    def try_pick_variant(variant: str) -> bool:
+        nonlocal last_click_err
+        vpat = re.compile(r"^\s*" + re.escape(variant) + r"\s*$", re.IGNORECASE | re.UNICODE)
+        try:
+            for role in ("option", "menuitem"):
+                exact = page.get_by_role(role, name=variant, exact=True)  # type: ignore[arg-type]
+                if exact.count() > 0:
+                    exact.first.click(timeout=timeout_ms)
+                    return True
+                loose = page.get_by_role(role, name=variant, exact=False)  # type: ignore[arg-type]
+                if loose.count() > 0:
+                    loose.first.click(timeout=timeout_ms)
+                    return True
+                by_row = page.get_by_role(role).filter(has_text=vpat)  # type: ignore[arg-type]
+                if by_row.count() > 0:
+                    by_row.first.click(timeout=timeout_ms)
+                    return True
+        except Exception as exc:  # noqa: BLE001
+            last_click_err = str(exc)
+        err_txt = _click_visible_text_option(page, variant, timeout_ms=timeout_ms)
+        return err_txt is None
+
+    for variant in _label_pick_variants(lab):
+        if try_pick_variant(variant):
+            return None
+
     if last_click_err:
         return f"pick_option: found a matching row but click failed: {last_click_err}"
     return f"pick_option: no visible role=option, role=menuitem, or listbox row matching {lab!r}"
@@ -311,18 +529,18 @@ def _run_planner_action_inner(
     *,
     default_timeout_ms: float = 12_000,
     vision_png_path: Path | None = None,
-) -> tuple[bool, PlaybookStep | None, str | None]:
+) -> tuple[bool, PlaybookStep | None, str | None, dict[str, Any] | None]:
     op = action.get("op")
     if not isinstance(op, str):
-        return True, None, "action.op must be string"
+        return True, None, "action.op must be string", None
 
     if op == "done":
-        return False, None, None
+        return False, None, None, None
 
     if op == "request_human":
         reason = action.get("reason")
         if not isinstance(reason, str) or not reason.strip():
-            return True, None, "request_human.reason must be a non-empty string"
+            return True, None, "request_human.reason must be a non-empty string", None
         instructions = action.get("instructions")
         if not isinstance(instructions, str) or not instructions.strip():
             instructions = action.get("describe")
@@ -331,6 +549,7 @@ def _run_planner_action_inner(
                 True,
                 None,
                 "request_human.instructions must be a non-empty string (or use describe)",
+                None,
             )
         if not telegram_hil_env_enabled():
             return (
@@ -339,11 +558,18 @@ def _run_planner_action_inner(
                 "request_human: Telegram HIL is not configured "
                 "(set DARWIN_WEB_TELEGRAM_BOT_TOKEN and DARWIN_WEB_TELEGRAM_CHAT_ID; "
                 "optional DARWIN_WEB_TELEGRAM_HIL=1)",
+                {
+                    "request_human": {
+                        "reason": reason.strip(),
+                        "instructions": instructions.strip(),
+                        "telegram": {"configured": False, "hint_message": owner_telegram_reply_hint_plain()},
+                    }
+                },
             )
         try:
             page_url = page.url
         except Exception as exc:  # noqa: BLE001
-            return True, None, f"request_human: could not read page.url: {exc}"
+            return True, None, f"request_human: could not read page.url: {exc}", None
         wait_for_owner = coerce_bool(action.get("wait_for_owner"), default=True)
         max_wait_s = coerce_max_wait_s(action.get("max_wait_s"), default=3600.0)
 
@@ -359,35 +585,54 @@ def _run_planner_action_inner(
             except Exception:  # noqa: BLE001
                 image_for_telegram = None
 
-        err = notify_owner_request_human(
+        hil = notify_owner_request_human(
             reason=reason.strip(),
             instructions=instructions.strip(),
             page_url=page_url,
             image_path=image_for_telegram,
             wait_for_owner=wait_for_owner,
             max_wait_s=max_wait_s,
+            browser_cdp_ws_url=get_browser_cdp_ws_url(),
+            browser_live_url=get_browser_live_url(),
         )
-        if err:
-            return True, None, err
-        return True, None, None
+        meta = {
+            "request_human": {
+                "reason": reason.strip(),
+                "instructions": instructions.strip(),
+                "telegram": {
+                    "configured": hil.telegram_configured,
+                    "hil_kind": hil.hil_kind,
+                    "browser_action_notice": hil.browser_action_notice,
+                    "browser_cdp_ws_url": hil.browser_cdp_ws_url,
+                    "browser_live_url": hil.browser_live_url,
+                    "hint_message": hil.owner_reply_hint,
+                    "owner_reply": hil.owner_reply,
+                    "waited_for_owner": hil.waited_for_owner,
+                    "error": hil.error,
+                },
+            }
+        }
+        if hil.error:
+            return True, None, hil.error, meta
+        return True, None, None, meta
 
     if op == "goto":
         url = action.get("url")
         if not isinstance(url, str) or not url.strip():
-            return True, None, "goto requires non-empty url string"
+            return True, None, "goto requires non-empty url string", None
         u = url.strip()
         page.goto(u, wait_until="domcontentloaded", timeout=default_timeout_ms)
         reset_pw_cache()
         desc = _planner_description(action, f"Open page {u}")
-        return True, PlaybookStep(op="goto", description=desc, dom={"url": u}, url=u), None
+        return True, PlaybookStep(op="goto", description=desc, dom={"url": u}, url=u), None, None
 
     if op == "go_back":
         try:
             resp = page.go_back(wait_until="domcontentloaded", timeout=default_timeout_ms)
         except Exception as exc:  # noqa: BLE001
-            return True, None, f"go_back: browser back failed: {exc}"
+            return True, None, f"go_back: browser back failed: {exc}", None
         if resp is None:
-            return True, None, "go_back: no previous page in history"
+            return True, None, "go_back: no previous page in history", None
         reset_pw_cache()
         _post_click_settle(page)
         try:
@@ -395,48 +640,48 @@ def _run_planner_action_inner(
         except Exception:  # noqa: BLE001
             new_url = "unknown"
         desc = _planner_description(action, f"Navigate back to {new_url}")
-        return True, PlaybookStep(op="go_back", description=desc, dom={"url": new_url}, url=new_url), None
+        return True, PlaybookStep(op="go_back", description=desc, dom={"url": new_url}, url=new_url), None, None
 
     if op == "wait_ms":
         ms = _as_int(action.get("ms", 500), "ms")
         ms = max(0, min(ms, 60_000))
         page.wait_for_timeout(ms)
         desc = _planner_description(action, f"Wait {ms} ms for the page to settle")
-        return True, PlaybookStep(op="wait_ms", description=desc, dom={"ms": ms}, ms=ms), None
+        return True, PlaybookStep(op="wait_ms", description=desc, dom={"ms": ms}, ms=ms), None, None
 
     if op == "scroll_into_view":
         ref, ref_err = _parse_ref(action, op="scroll_into_view")
         if ref_err or ref is None:
-            return True, None, ref_err
+            return True, None, ref_err, None
         loc = _ref_locator(page, ref)
         loc.first.scroll_into_view_if_needed(timeout=int(default_timeout_ms))
         handle = loc.first.element_handle()
         if handle is None:
-            return True, None, f"scroll_into_view: no element for ref {ref}"
+            return True, None, f"scroll_into_view: no element for ref {ref}", None
         sel = css_path_for_element(handle)
         dom = dom_fields_for_element(handle, selector=sel)
         handle.dispose()
         desc = _planner_description(action, f"Scroll target into view ({dom.get('tag', 'element')})")
-        return True, PlaybookStep(op="scroll_into_view", description=desc, dom=dom, selector=sel), None
+        return True, PlaybookStep(op="scroll_into_view", description=desc, dom=dom, selector=sel), None, None
 
     if op == "select_option":
         ref, ref_err = _parse_ref(action, op="select_option")
         if ref_err or ref is None:
-            return True, None, ref_err
+            return True, None, ref_err, None
         value = action.get("value")
         if not isinstance(value, str):
-            return True, None, "select_option.value must be string"
+            return True, None, "select_option.value must be string", None
         loc = _ref_locator(page, ref).first
         loc.scroll_into_view_if_needed(timeout=int(default_timeout_ms))
         handle = loc.element_handle()
         if handle is None:
-            return True, None, f"select_option: no element for ref {ref}"
+            return True, None, f"select_option: no element for ref {ref}", None
         if not handle.evaluate("(el) => el instanceof HTMLSelectElement"):
             handle.dispose()
             return True, None, (
                 f"select_option: ref {ref} is not a native <select> — use click on the combobox ref, "
                 "then pick_option with the exact visible row text (not the field placeholder)."
-            )
+            ), None
         sel = css_path_for_element(handle)
         dom = dom_fields_for_element(handle, selector=sel)
         handle.dispose()
@@ -452,7 +697,32 @@ def _run_planner_action_inner(
             dom=dom,
             selector=sel,
             value=value,
-        ), None
+        ), None, None
+
+    if op == "combobox_pick":
+        ref, ref_err = _parse_ref(action, op="combobox_pick")
+        if ref_err or ref is None:
+            return True, None, ref_err, None
+        label = action.get("label")
+        if not isinstance(label, str) or not label.strip():
+            label = action.get("text")
+        if not isinstance(label, str) or not label.strip():
+            label = action.get("value")
+        if not isinstance(label, str) or not label.strip():
+            return True, None, "combobox_pick requires label|text|value (non-empty string)", None
+        lab = label.strip()
+        sel, err = _combobox_pick_at_ref(page, ref, lab, default_timeout_ms=default_timeout_ms)
+        if err:
+            return True, None, err, None
+        dom = {"selector": sel, "option_label": lab} if sel else {"option_label": lab}
+        desc = _planner_description(action, f"Pick combobox option {lab!r}")
+        return True, PlaybookStep(
+            op="pick_option",
+            description=desc,
+            dom=dom,
+            selector=sel,
+            value=lab,
+        ), None, None
 
     if op == "pick_option":
         label = action.get("label")
@@ -461,11 +731,11 @@ def _run_planner_action_inner(
         if not isinstance(label, str) or not label.strip():
             label = action.get("value")
         if not isinstance(label, str) or not label.strip():
-            return True, None, "pick_option requires label|text|value (non-empty string)"
+            return True, None, "pick_option requires label|text|value (non-empty string)", None
         lab = label.strip()
         err = _pick_role_option(page, lab, timeout_ms=int(default_timeout_ms))
         if err:
-            return True, None, err
+            return True, None, err, None
         _post_click_settle(page)
         desc = _planner_description(
             action,
@@ -477,17 +747,17 @@ def _run_planner_action_inner(
             dom={"option_label": lab},
             selector=None,
             value=lab,
-        ), None
+        ), None, None
 
     if op == "click":
         ref, ref_err = _parse_ref(action, op="click")
         if ref_err or ref is None:
-            return True, None, ref_err
+            return True, None, ref_err, None
         loc = _ref_locator(page, ref).first
         loc.scroll_into_view_if_needed(timeout=int(default_timeout_ms))
         handle = loc.element_handle()
         if handle is None:
-            return True, None, f"click: no element for ref {ref}"
+            return True, None, f"click: no element for ref {ref}", None
         sel = css_path_for_element(handle)
         dom = dom_fields_for_element(handle, selector=sel)
 
@@ -506,27 +776,49 @@ def _run_planner_action_inner(
                     "Clicking it again would close the dropdown. Instead, use "
                     'pick_option with the visible option text (e.g. {"op":"pick_option","label":"Enero","describe":"..."}), '
                     "or click the specific option ref from the element list."
-                )
+                ), None
 
-        loc.click(timeout=default_timeout_ms)
+        popup_timeout = min(5000, int(default_timeout_ms))
+        clicked = False
+        try:
+            with page.expect_popup(timeout=popup_timeout) as popup_info:
+                loc.click(timeout=default_timeout_ms)
+            popup = popup_info.value
+            try:
+                popup.wait_for_load_state("domcontentloaded", timeout=int(default_timeout_ms))
+            except Exception:  # noqa: BLE001
+                pass
+            page = popup
+            clicked = True
+        except PlaywrightTimeoutError:
+            pass
+        if not clicked:
+            loc.click(timeout=default_timeout_ms)
+        if role_l == "combobox" and not clicked:
+            for menu_sel in ('[role="listbox"]', '[role="menu"]'):
+                try:
+                    page.locator(menu_sel).first.wait_for(state="visible", timeout=2500)
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
         handle.dispose()
         _post_click_settle(page)
         desc = _planner_description(action, f"Click {dom.get('tag', 'element')}")
-        return True, PlaybookStep(op="click", description=desc, dom=dom, selector=sel), None
+        return True, PlaybookStep(op="click", description=desc, dom=dom, selector=sel), None, None
 
     if op == "fill":
         ref, ref_err = _parse_ref(action, op="fill")
         if ref_err or ref is None:
-            return True, None, ref_err
+            return True, None, ref_err, None
         value = action.get("value")
         if not isinstance(value, str):
-            return True, None, "fill.value must be string"
+            return True, None, "fill.value must be string", None
         clear_first = bool(action.get("clear_first", True))
         loc = _ref_locator(page, ref).first
         loc.scroll_into_view_if_needed(timeout=int(default_timeout_ms))
         handle = loc.element_handle()
         if handle is None:
-            return True, None, f"fill: no element for ref {ref}"
+            return True, None, f"fill: no element for ref {ref}", None
         sel = css_path_for_element(handle)
         dom = dom_fields_for_element(handle, selector=sel)
         is_select = bool(handle.evaluate("(el) => el instanceof HTMLSelectElement"))
@@ -545,15 +837,15 @@ def _run_planner_action_inner(
                         f"fill: ref {ref} is role=combobox — click to open the list, then pick_option with the "
                         "exact visible option text (e.g. month name in the page language), or use the day/year "
                         "text input ref from the snapshot list."
-                    )
+                    ), None
                 return True, None, (
                     f"fill: ref {ref} (tag={dom.get('tag', 'element')!r}) is not a fillable text control — "
                     "use click, pick_option, or a different ref."
-                )
+                ), None
         handle.dispose()
         expanded, gerr = try_expand_fill(value, dom=dom)
         if gerr:
-            return True, None, gerr
+            return True, None, gerr, None
         value = expanded
         if is_select:
             _select_option_on_locator(loc, value, timeout_ms=int(default_timeout_ms))
@@ -568,7 +860,7 @@ def _run_planner_action_inner(
                 dom=dom,
                 selector=sel,
                 value=value,
-            ), None
+            ), None, None
         inp_type = str(dom.get("type", "")).lower()
         if inp_type not in ("checkbox", "radio", "file", "button", "submit", "hidden", "range", "color"):
             try:
@@ -583,6 +875,7 @@ def _run_planner_action_inner(
                     None,
                     f"fill skipped: ref {ref} already contains this exact text{loc_tail}; do not repeat on this screen. "
                     "Use pick_option if a listbox is open, otherwise click Next or fill a different empty field.",
+                    None,
                 )
         dom["entered_text"] = value
         try:
@@ -590,7 +883,7 @@ def _run_planner_action_inner(
                 loc.fill("")
             loc.fill(value, timeout=default_timeout_ms)
         except Exception as exc:  # noqa: BLE001 — Playwright fill errors become planner-visible strings
-            return True, None, f"fill: ref {ref} failed: {exc}"
+            return True, None, f"fill: ref {ref} failed: {exc}", None
         desc = _planner_description(
             action,
             f"Enter text into {dom.get('tag', 'field')} (selector {sel})",
@@ -602,12 +895,12 @@ def _run_planner_action_inner(
             selector=sel,
             value=value,
             clear_first=clear_first,
-        ), None
+        ), None, None
 
     if op == "press":
         key = action.get("key")
         if not isinstance(key, str) or not key.strip():
-            return True, None, "press.key must be non-empty string"
+            return True, None, "press.key must be non-empty string", None
         k = key.strip()
         ref_raw = action.get("ref")
         sel: str | None = None
@@ -615,12 +908,12 @@ def _run_planner_action_inner(
         if ref_raw is not None:
             ref, ref_err = _parse_ref(action, op="press")
             if ref_err or ref is None:
-                return True, None, ref_err
+                return True, None, ref_err, None
             loc = _ref_locator(page, ref).first
             loc.scroll_into_view_if_needed(timeout=int(default_timeout_ms))
             handle = loc.element_handle()
             if handle is None:
-                return True, None, f"press: no element for ref {ref}"
+                return True, None, f"press: no element for ref {ref}", None
             sel = css_path_for_element(handle)
             dom = dom_fields_for_element(handle, selector=sel)
             loc.click(timeout=default_timeout_ms)
@@ -631,9 +924,9 @@ def _run_planner_action_inner(
             dom = {"key": k}
         else:
             dom = {**dom, "key": k}
-        return True, PlaybookStep(op="press", description=desc, dom=dom, key=k, selector=sel), None
+        return True, PlaybookStep(op="press", description=desc, dom=dom, key=k, selector=sel), None, None
 
-    return True, None, f"unknown op: {op}"
+    return True, None, f"unknown op: {op}", None
 
 
 def run_planner_action(
@@ -642,21 +935,26 @@ def run_planner_action(
     *,
     default_timeout_ms: float = 12_000,
     vision_png_path: Path | None = None,
-) -> tuple[bool, PlaybookStep | None, str | None]:
+) -> tuple[bool, PlaybookStep | None, str | None, dict[str, Any] | None]:
     """Execute one planner *action* dict.
 
     Returns:
-        (continue_loop, playbook_step_recorded, error_message)
+        (continue_loop, playbook_step_recorded, error_message, optional_step_metadata)
     """
     try:
-        return _run_planner_action_inner(page, action, default_timeout_ms=default_timeout_ms, vision_png_path=vision_png_path)
+        return _run_planner_action_inner(
+            page, action, default_timeout_ms=default_timeout_ms, vision_png_path=vision_png_path
+        )
     except PlaywrightTimeoutError as exc:
         op = action.get("op", "?")
         ref = action.get("ref", "?")
-        return True, None, f"{op}: Playwright timeout for ref {ref} — element may be stale, hidden, or detached. {exc}"
+        return True, None, f"{op}: Playwright timeout for ref {ref} — element may be stale, hidden, or detached. {exc}", None
+    except (PageClosed, TargetClosedError) as exc:
+        op = action.get("op", "?")
+        return True, None, f"{op}: browser tab or session closed during step ({exc})", None
     except Exception as exc:  # noqa: BLE001
         op = action.get("op", "?")
-        return True, None, f"{op}: unexpected executor error: {exc}"
+        return True, None, f"{op}: unexpected executor error: {exc}", None
 
 
 def replay_step(page: Page, step: PlaybookStep, *, default_timeout_ms: float = 12_000) -> None:
@@ -680,7 +978,22 @@ def replay_step(page: Page, step: PlaybookStep, *, default_timeout_ms: float = 1
     if step.op == "pick_option":
         if not step.value:
             raise ValueError("pick_option step missing value (option label)")
+        if step.selector:
+            try:
+                page.locator(step.selector).first.click(timeout=int(default_timeout_ms))
+                page.wait_for_timeout(400)
+                _wait_for_dropdown_surface(page, timeout_ms=int(default_timeout_ms))
+            except Exception:  # noqa: BLE001
+                pass
         err = _pick_role_option(page, step.value, timeout_ms=int(default_timeout_ms))
+        if err:
+            for variant in _label_pick_variants(step.value):
+                err = _pick_role_option(page, variant, timeout_ms=int(default_timeout_ms))
+                if err is None:
+                    break
+                err = _click_visible_text_option(page, variant, timeout_ms=int(default_timeout_ms))
+                if err is None:
+                    break
         if err:
             raise RuntimeError(err)
         _post_click_settle(page)

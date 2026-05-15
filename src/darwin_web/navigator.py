@@ -800,7 +800,7 @@ def run_goal(
         err: str | None = None
         execute_exception: str | None = None
         try:
-            cont, pb_step, err = run_planner_action(page, action, vision_png_path=vision_path)
+            cont, pb_step, err, _meta = run_planner_action(page, action, vision_png_path=vision_path)
         except Exception as exc:  # noqa: BLE001
             execute_exception = str(exc)
             errors.append(f"turn {turn}: execute:{exc}")

@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import string
 
-from darwin_web.genhash import expand_fill_value, genhash, reset_pw_cache, try_expand_fill
+from darwin_web.genhash import (
+    expand_fill_value,
+    genhash,
+    reserved_email_domain_error,
+    reset_pw_cache,
+    try_expand_fill,
+)
 
 
 def test_genhash_username_charset_and_length() -> None:
@@ -65,6 +71,13 @@ def test_try_expand_fill_genhash_digit_suffix_and_email_local() -> None:
     assert "$" not in mail
     local = mail.split("@", 1)[0]
     assert len(local) == 18
+
+
+def test_try_expand_fill_rejects_reserved_mail_host() -> None:
+    raw, err = try_expand_fill("$GENHASH@example.com", dom=None)
+    assert err is not None
+    assert raw == "$GENHASH@example.com"
+    assert reserved_email_domain_error("user@example.com") is not None
 
 
 def test_try_expand_fill_blocks_genhash2_email_on_first_name() -> None:
