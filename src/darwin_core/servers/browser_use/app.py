@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import os
-from urllib.parse import urlencode
 
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Browser Use Server", version="0.1.0")
+from darwin_core.servers.browser_use.api import create_browser_session, stop_browser_session
+
+app = FastAPI(title="Browser Use Server", version="0.2.0")
 
 
 class BrowserConnectRequest(BaseModel):
@@ -21,14 +22,20 @@ class BrowserConnectRequest(BaseModel):
         default=None,
         ge=60,
         le=14400,
-        description="Optional session timeout in seconds.",
+        description="Optional session timeout in seconds (max 4h).",
     )
     browser_screen_width: int | None = Field(default=None, ge=320, le=7680)
     browser_screen_height: int | None = Field(default=None, ge=240, le=4320)
 
 
 class BrowserConnectResponse(BaseModel):
+    browser_id: str
     cdp_ws_url: str
+    live_url: str
+
+
+class BrowserDisconnectRequest(BaseModel):
+    browser_id: str
 
 
 @app.get("/health")
@@ -38,28 +45,40 @@ def health() -> dict[str, str]:
 
 @app.post("/browser/connect", response_model=BrowserConnectResponse)
 def browser_connect(payload: BrowserConnectRequest) -> BrowserConnectResponse:
-    api_key = os.getenv("BROWSER_USE_API_KEY")
-    if not api_key:
+    """Create a dedicated Browser Use Cloud session (agent + live view share the same tab)."""
+    if not os.getenv("BROWSER_USE_API_KEY"):
         raise HTTPException(status_code=500, detail="Missing BROWSER_USE_API_KEY.")
 
-    proxy_country_code = payload.proxy_country_code or os.getenv("BROWSER_USE_PROXY_COUNTRY_CODE")
-    profile_id = payload.profile_id or os.getenv("BROWSER_USE_PROFILE_ID")
-
-    params: dict[str, str] = {"apiKey": api_key}
-    if proxy_country_code:
-        params["proxyCountryCode"] = proxy_country_code
-    if profile_id:
-        params["profileId"] = profile_id
+    timeout_minutes: int | None = None
     if payload.timeout_seconds is not None:
-        params["timeout"] = str(payload.timeout_seconds)
-    if payload.browser_screen_width is not None:
-        params["browserScreenWidth"] = str(payload.browser_screen_width)
-    if payload.browser_screen_height is not None:
-        params["browserScreenHeight"] = str(payload.browser_screen_height)
+        timeout_minutes = max(1, min(240, (payload.timeout_seconds + 59) // 60))
 
-    connect_base_url = os.getenv("BROWSER_USE_CONNECT_BASE_URL", "wss://connect.browser-use.com").rstrip("/")
-    cdp_ws_url = f"{connect_base_url}?{urlencode(params)}"
-    return BrowserConnectResponse(cdp_ws_url=cdp_ws_url)
+    try:
+        session = create_browser_session(
+            proxy_country_code=payload.proxy_country_code,
+            profile_id=payload.profile_id,
+            timeout_minutes=timeout_minutes,
+            browser_screen_width=payload.browser_screen_width,
+            browser_screen_height=payload.browser_screen_height,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return BrowserConnectResponse(
+        browser_id=session.browser_id,
+        cdp_ws_url=session.cdp_url,
+        live_url=session.live_url,
+    )
+
+
+@app.post("/browser/disconnect")
+def browser_disconnect(payload: BrowserDisconnectRequest) -> dict[str, str]:
+    """Stop a browser session created by :func:`browser_connect`."""
+    try:
+        stop_browser_session(payload.browser_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"status": "stopped"}
 
 
 def main() -> None:
@@ -71,4 +90,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
